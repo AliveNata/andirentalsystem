@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Receipt - Andi Rental Mobil</title>
+    <style>
+        body, table, td, p, a, li, blockquote {
+            -webkit-text-size-adjust: 100%;
+            -ms-text-size-adjust: 100%;
+        }
+        table, td {
+            mso-table-lspace: 0pt;
+            mso-table-rspace: 0pt;
+        }
+        img {
+            -ms-interpolation-mode: bicubic;
+            border: 0;
+            height: auto;
+            line-height: 100%;
+            outline: none;
+            text-decoration: none;
+        }
+        @media screen and (max-width: 600px) {
+            .container {
+                width: 100% !important;
+                padding: 10px !important;
+            }
+            .content {
+                padding: 20px !important;
+            }
+            .two-column {
+                width: 100% !important;
+                display: block !important;
+            }
+            .signature-section {
+                padding: 10px !important;
+            }
+        }
+    </style>
+</head>
+<body style="margin: 0; padding: 0; background-color: #fff7ed; font-family: Arial, sans-serif; line-height: 1.5;">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #fff7ed;">
+        <tr>
+            <td style="padding: 20px 0;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" class="container" style="margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);">
+                    <tr>
+                        <td style="background: linear-gradient(to right, #ea580c, #c2410c); color: white; padding: 30px; border-radius: 8px 8px 0 0;">
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                                <tr>
+                                    <td style="vertical-align: top;">
+                                        <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                                            <tr>
+                                                <td style="padding-right: 15px; vertical-align: top;">
+                                                    <div style="width: 32px; height: 32px; background-color: rgba(255,255,255,0.2); border-radius: 4px; text-align: center; line-height: 32px; font-size: 18px;">🚗</div>
+                                                </td>
+                                                <td style="vertical-align: top;">
+                                                    <h1 style="margin: 0; font-size: 20px; font-weight: bold; color: white;">Andi Rental Mobil</h1>
+                                                    <p style="margin: 5px 0 0 0; font-size: 14px; color: rgba(255,255,255,0.8);">Rental Mobil Terpercaya</p>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                    <td style="text-align: right; vertical-align: top;">
+                                        <p style="margin: 0; font-size: 12px; color: rgba(255,255,255,0.8);">Receipt Date</p>
+                                        <p id="receipt-date">2 Agustus 2025</p>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td style="background-color: #fffbeb; border-left: 4px solid #f97316; padding: 25px;">
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                                <tr>
+                                    <td style="padding-right: 15px; vertical-align: top;">
+                                        <div style="width: 24px; height: 24px; background-color: #f97316; border-radius: 50%; text-align: center; line-height: 24px; color: white; font-size: 14px;">✓</div>
+                                    </td>
+                                    <td style="vertical-align: top;">
+                                        <h2 id="thankYouText" style="margin: 0; font-size: 18px; font-weight: bold; color: #c2410c;">
+                                        Terima Kasih, Aliva ask!
+                                        </h2>
+                                        <p style="margin: 5px 0 0 0; color: #ea580c;">Pembayaran Anda telah berhasil diproses</p>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Booking Details -->
+                    <tr>
+                        <td class="content" style="padding: 30px;">
+                            <!-- Two Column Layout -->
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                                <tr>
+                                    <td class="two-column" style="width: 50%; vertical-align: top; padding-right: 15px;">
+                                        <!-- Customer Name -->
+                                        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom: 20px;">
+                                            <tr>
+                                                <td style="padding-right: 15px; vertical-align: top; width: 24px;">
+                                                    <div style="color: #6b7280; font-size: 18px;">👤</div>
+                                                </td>
+                                                <td style="vertical-align: top;">
+                                                    <p style="margin: 0; font-size: 12px; color: #6b7280;">Nama Penyewa</p>
+                                                    <div id="customerName">Aliva ask</div>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                        
+                                        <!-- Car Type -->
+                                        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                                            <tr>
+                                                <td style="padding-right: 15px; vertical-align: top; width: 24px;">
+                                                    <div style="color: #6b7280; font-size: 18px;">🚗</div>
+                                                </td>
+                                                <td style="vertical-align: top;">
+                                                    <p style="margin: 0; font-size: 12px; color: #6b7280;">Kendaraan</p>
+                                                    <div id="carType">Honda Brio Satya</div>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                    
+                                    <td class="two-column" style="width: 50%; vertical-align: top; padding-left: 15px;">
+                                        <!-- Rental Period -->
+                                        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom: 20px;">
+                                            <tr>
+                                                <td style="padding-right: 15px; vertical-align: top; width: 24px;">
+                                                    <div style="color: #6b7280; font-size: 18px;">📅</div>
+                                                </td>
+                                                <td style="vertical-align: top;">
+                                                    <p style="margin: 0; font-size: 12px; color: #6b7280;">Periode Sewa</p>
+                                                    <div id="rentalPeriod">28 Juli 2025 - 2 Agustus 2025</div>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                        
+                                        <!-- Start Time -->
+                                        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                                            <tr>
+                                                <td style="padding-right: 15px; vertical-align: top; width: 24px;">
+                                                    <div style="color: #6b7280; font-size: 18px;">🕘</div>
+                                                </td>
+                                                <td style="vertical-align: top;">
+                                                    <p style="margin: 0; font-size: 12px; color: #6b7280;">Jam Mulai</p>
+                                                    <div id="startTime">-</div>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <!-- Booking ID -->
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 30px 0;">
+                                <tr>
+                                    <td style="background-color: #f9fafb; padding: 20px; border-radius: 6px;">
+                                        <p style="margin: 0 0 5px 0; font-size: 12px; color: #6b7280;">Kode Booking</p>
+                                        <div id="bookingCode">ARMJ2507284UOEGJ</div>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <!-- Total Amount with LUNAS Stamp -->
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 30px 0;">
+                        <tr>
+                            <td style="background: linear-gradient(to right, #fff7ed, #ffedd5); padding: 30px; border-radius: 6px; border: 2px solid #fed7aa; text-align: center; position: relative;">
+                                <p style="margin: 0 0 10px 0; font-size: 14px; color: #78350f;">Total Pembayaran</p>
+                                <div id="grandTotal">Rp 2.420.000</div>
+                                <!-- <div style="
+                                    display: inline-block;
+                                    padding: 6px 20px;
+                                    border: 3px solid #c2410c;
+                                    color: #c2410c;
+                                    font-weight: bold;
+                                    font-size: 18px;
+                                    text-transform: uppercase;
+                                    border-radius: 50%/40%;
+                                    font-family: 'Courier New', Courier, monospace;
+                                    transform: rotate(-10deg);
+                                    opacity: 0.7;
+                                    letter-spacing: 2px;
+                                    margin-top: 10px;
+                                    text-align: center;
+                                ">
+                                    LUNAS
+                                </div> -->
+                                <img id="lunasStamp" src="https://i.imgur.com/fOKiZPA.png" alt="LUNAS" style="margin-top: 10px; max-width: 120px; transform: rotate(-10deg); opacity: 0.7;" />
+                            </td>
+                        </tr>
+                    </table>
+
+
+
+                            <!-- Driver Info -->
+                            <!-- <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 30px 0;">
+                                <tr>
+                                    <td style="background-color: #eff6ff; padding: 20px; border-radius: 6px;">
+                                        <p style="margin: 0 0 5px 0; font-size: 12px; color: #2563eb;">Driver yang Bertugas</p>
+                                        <p style="margin: 0 0 10px 0; font-weight: bold; color: #1e40af;">Andi Pratama</p>
+                                        <div style="display: flex; align-items: center;">
+                                            <div style="color: #fbbf24; margin-right: 10px;">★★★★★</div>
+                                            <span style="font-size: 12px; color: #2563eb;">Excellent Service</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table> -->
+
+                            <!-- Signature Section -->
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-top: 40px; border-top: 2px solid #e5e7eb; padding-top: 30px;">
+    <tr>
+        <td style="width: 66.66%; text-align: left; vertical-align: top; padding: 0 10px;">
+            <p style="margin: 0 0 20px 0; font-size: 14px; color: #6b7280;">
+                Terima kasih telah mempercayai <strong>Andi Rental Mobil Jakarta</strong>.<br>
+                Kami harap Anda puas dengan layanan kami dan sampai jumpa lagi!
+            </p>
+        </td>
+        <td class="signature-section" style="width: 33.33%; text-align: center; vertical-align: top; padding: 0 10px;">
+            <p style="margin: 0 0 20px 0; font-size: 12px; color: #6b7280;">Head Operation</p>
+            <!-- <div style="border-bottom: 1px solid #d1d5db; height: 60px; margin-bottom: 10px;"></div> -->
+            <img id="signatureImage" src="https://i.imgur.com/yHqJqMD.png" alt="Tanda Tangan" style="height: 60px; margin-bottom: 10px;" />
+            <p style="margin: 0; font-size: 12px; font-weight: 500;">Ramona Sheilla Yulita</p>
+        </td>
+    </tr>
+</table>
+
+                            <!-- Footer -->
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-top: 40px; border-top: 1px solid #e5e7eb; padding-top: 30px;">
+                                <tr>
+                                    <td style="text-align: center;">
+                                        <p style="margin: 0 0 10px 0; font-size: 10px; color: #6b7280;">
+                                            Receipt ini digenerate otomatis oleh sistem Andi Rental Mobil
+                                        </p>
+                                        <p style="margin: 0 0 20px 0; font-size: 10px; color: #9ca3af;">
+                                            Untuk pertanyaan, hubungi customer service:  0214350220 / 0812-19590-7990
+                                        </p>
+                                        <p style="margin: 0; font-size: 10px; color: #9ca3af;">
+                                            Andi Rental Mobil • Jl. Tongkol No.8 Tj.Priok, Jakarta Utara • andirentalmobiladm@gmail.com
+                                        </p>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+
+    <script>
+        // Set current date for receipt
+        document.addEventListener('DOMContentLoaded', function() {
+            const today = new Date();
+            const options = { 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric',
+                timeZone: 'Asia/Jakarta'
+            };
+            const formattedDate = today.toLocaleDateString('id-ID', options);
+            const dateElement = document.getElementById('receipt-date');
+            if (dateElement) {
+                dateElement.textContent = formattedDate;
+            }
+        });
+    </script>
+</body>
+</html>
