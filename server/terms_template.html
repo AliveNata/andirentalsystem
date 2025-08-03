@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Syarat dan Ketentuan</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body {
+        font-family: 'Arial', sans-serif;
+        background-color: #f8f8f8;
+        margin: 0;
+      }
+
+      .page {
+        width: 210mm;
+        margin: 0 auto;
+        padding: 2cm 1.5cm;
+        background: white;
+        box-shadow: 0 0 0.5cm rgba(0, 0, 0, 0.1);
+        box-sizing: border-box;
+        position: relative;
+      }
+
+      .break-inside-avoid {
+        break-inside: avoid;
+      }
+
+      .print-spacer {
+        display: none;
+        height: 2cm;
+      }
+
+      @media print {
+        body {
+          margin: 0;
+        }
+
+        .page {
+          page-break-after: always;
+          margin: 0 auto;
+          padding: 2cm 1.5cm;
+          box-shadow: none;
+          background: white;
+          position: relative;
+        }
+
+        .print-spacer {
+          display: block;
+          page-break-after: always;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page text-[13px] leading-relaxed">
+      <!-- Header -->
+      <div class="bg-gradient-to-r from-orange-500 via-orange-400 to-orange-300 p-6 text-white mb-4 rounded-xl">
+        <div class="flex items-start space-x-4">
+          <div class="rounded-xl">
+            <img src="[LOGO]" alt="Logo" class="w-16 h-16 object-contain" />
+          </div>
+          <div>
+            <h1 class="font-bold text-2xl tracking-wide">ANDI RENTAL MOBIL</h1>
+            <p>Jl. Tongkol No.8 Tj.Priok, Jakarta Utara</p>
+            <p>Telepon: 0214350220 / 0812-19590-7990</p>
+            <p>Email: andirentalmobiladm@gmail.com</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Judul -->
+      <div class="text-center my-6">
+        <h2 class="inline-block bg-orange-500 text-white text-lg font-semibold px-6 py-3 rounded-xl shadow">
+          SYARAT DAN KETENTUAN PERJANJIAN SEWA KENDARAAN
+        </h2>
+      </div>
+
+      <!-- Intro -->
+      <div class="bg-orange-50 border-l-4 border-orange-400 p-4 rounded-r-lg mb-4">
+        <p class="text-gray-800 font-medium">Persewaan ini memiliki pasal-pasal dan ketentuan sebagai berikut:</p>
+      </div>
+
+      <!-- Contoh Pasal -->
+      <div class="bg-white border border-orange-200 rounded-xl p-5 mb-4">
+        <div class="flex items-center mb-2">
+          <div class="w-7 h-7 bg-orange-500 text-white rounded-full flex items-center justify-center font-bold text-sm mr-3">A</div>
+          <h4 class="font-bold text-gray-800">Pasal 1</h4>
+        </div>
+        <p class="text-gray-700 pl-10">
+          <strong>Andi Rental Mobil</strong> setuju menyewakan kepada <strong>penyewa</strong> dengan pembayaran dilakukan di depan
+          dan <strong>penyewa</strong> wajib memberikan identitas data yang masih berlaku, serta membayar DP
+          <em>(Down Payment)</em> bagi <strong>penyewa</strong> (DP tidak bisa dikembalikan).
+        </p>
+      </div>
+
+      <!-- Pasal 2 -->
+      <div class="bg-white border border-orange-200 rounded-xl p-5 mb-4">
+        <div class="flex items-center mb-2">
+          <div class="w-7 h-7 bg-orange-500 text-white rounded-full flex items-center justify-center font-bold text-sm mr-3">B</div>
+          <h4 class="font-bold text-gray-800">Pasal 2</h4>
+        </div>
+        <p class="text-gray-700 pl-10">
+          Jika <strong>penyewa</strong> hendak memperpanjang masa sewa, wajib memberi tahu <strong>Andi Rental Mobil</strong>
+          1 hari sebelumnya dan membayar sesuai ketentuan Pasal 1.
+        </p>
+      </div>
+
+      <!-- Pasal 3 -->
+      <div class="bg-white border border-orange-200 rounded-xl p-5 mb-4">
+        <div class="flex items-center mb-2">
+          <div class="w-7 h-7 bg-orange-500 text-white rounded-full flex items-center justify-center font-bold text-sm mr-3">C</div>
+          <h4 class="font-bold text-gray-800">Pasal 3</h4>
+        </div>
+        <p class="text-gray-700 pl-10">
+          Pemakaian kendaraan lepas kunci maksimal 24 jam/hari. Jika pakai supir, maksimal 12 jam.
+          Keterlambatan dikenakan biaya tambahan <span class="bg-orange-100 text-orange-700 px-1 rounded">10% per jam</span>,
+          dan jika lebih dari 4 jam akan dikenakan biaya 1 hari.
+        </p>
+      </div>
+
+            <!-- Pasal 4 -->
+      <div class="bg-white border border-orange-200 rounded-xl p-5 mb-4">
+        <div class="flex items-center mb-2">
+          <div class="w-7 h-7 bg-orange-500 text-white rounded-full flex items-center justify-center font-bold text-sm mr-3">D</div>
+          <h4 class="font-bold text-gray-800">Pasal 4</h4>
+        </div>
+        <p class="text-gray-700 pl-10">
+          <strong>Andi Rental Mobil</strong> menyerahkan kendaraan dalam kondisi baik, bersih, dan layak jalan.
+          <strong>Penyewa</strong> wajib menjaga kondisi kendaraan. Jika terjadi kecelakaan, kehilangan,
+          kerusakan atau kehilangan aksesoris, maka <strong>penyewa</strong> bertanggung jawab sepenuhnya.
+        </p>
+      </div>
+
+      <!-- Pasal 5 -->
+      <div class="bg-white border border-orange-200 rounded-xl p-5 mb-4">
+        <div class="flex items-center mb-2">
+          <div class="w-7 h-7 bg-orange-500 text-white rounded-full flex items-center justify-center font-bold text-sm mr-3">E</div>
+          <h4 class="font-bold text-gray-800">Pasal 5</h4>
+        </div>
+        <p class="text-gray-700 pl-10">
+          Jika terjadi kecelakaan, <strong>penyewa</strong> membayar premi asuransi sebesar 
+          <span class="bg-orange-500 text-white px-2 py-1 rounded-full text-sm">Rp.500.000 / kejadian</span>.
+          Selama perbaikan di bengkel, sewa tetap dibayar sesuai <strong>Pasal 1</strong>.
+        </p>
+      </div>
+
+      <!-- Pasal 6 -->
+      <div class="bg-white border border-orange-200 rounded-xl p-5 mb-4">
+        <div class="flex items-center mb-2">
+          <div class="w-7 h-7 bg-orange-500 text-white rounded-full flex items-center justify-center font-bold text-sm mr-3">F</div>
+          <h4 class="font-bold text-gray-800">Pasal 6</h4>
+        </div>
+        <p class="text-gray-700 pl-10 mb-3">
+          Hal-hal yang tidak boleh dilakukan oleh <strong>penyewa</strong> tanpa persetujuan <strong>Andi Rental Mobil</strong>:
+        </p>
+        <ul class="list-disc text-gray-700 pl-16 space-y-2">
+          <li>Memindahtangankan hak sewa kepada pihak lain.</li>
+          <li>Menggadaikan atau menganggunkan kendaraan.</li>
+          <li>Menggunakan kendaraan untuk tindak pidana/kriminalitas.</li>
+          <li>Penyalahgunaan selama masa sewa yang menyebabkan mobil disita/gadaikan tetap wajib membayar sewa sesuai <strong>Pasal 1</strong>.</li>
+        </ul>
+      </div>
+
+      <!-- Pasal 7 -->
+      <div class="bg-white border border-orange-200 rounded-xl p-5 mb-4">
+        <div class="flex items-center mb-2">
+          <div class="w-7 h-7 bg-orange-500 text-white rounded-full flex items-center justify-center font-bold text-sm mr-3">G</div>
+          <h4 class="font-bold text-gray-800">Pasal 7</h4>
+        </div>
+        <p class="text-gray-700 pl-10">
+          Jika <strong>penyewa</strong> membatalkan perjanjian secara sepihak, maka seluruh kerugian menjadi tanggung jawab
+          <strong>penyewa</strong>.
+        </p>
+      </div>
+
+      <!-- Pasal 8 -->
+      <div class="bg-white border border-orange-200 rounded-xl p-5 mb-4">
+        <div class="flex items-center mb-2">
+          <div class="w-7 h-7 bg-orange-500 text-white rounded-full flex items-center justify-center font-bold text-sm mr-3">H</div>
+          <h4 class="font-bold text-gray-800">Pasal 8</h4>
+        </div>
+        <p class="text-gray-700 pl-10">
+          Hal-hal yang belum diatur akan diselesaikan secara musyawarah. Jika tidak tercapai, maka diselesaikan sesuai hukum berlaku.
+        </p>
+      </div>
+
+            <!-- Persetujuan -->
+        <div class="mt-8 border-2 border-orange-200 bg-gradient-to-r from-orange-50 to-white rounded-xl p-5">
+        <div class="mb-3 font-bold text-gray-800 text-lg">Persetujuan</div>
+        <div class="flex items-start space-x-3">
+          <!-- <input type="checkbox" class="w-5 h-5 accent-orange-500 mt-1" /> -->
+          <p class="text-gray-700">
+            Dengan meneruskan proses ini ke pembayaran, maka Anda menyatakan telah membaca, memahami, dan menyetujui seluruh syarat dan ketentuan di atas.
+          </p>
+        </div>
+      </div>
+
+      <!-- Tanda Tangan -->
+      <!-- <div class="grid grid-cols-2 gap-10 mx-4 mt-10 bg-gray-50 p-6 rounded-xl">
+        <div class="text-center">
+          <div class="mb-16">
+            <div class="inline-block bg-orange-500 text-white px-5 py-2 rounded font-semibold">
+              Penyewa
+            </div>
+          </div>
+          <div class="border-t-2 border-dashed border-orange-300 pt-2">
+            <p class="text-gray-600 text-sm">Nama & Tanda Tangan</p>
+          </div>
+        </div>
+        <div class="text-center">
+          <div class="mb-16">
+            <div class="inline-block bg-orange-500 text-white px-5 py-2 rounded font-semibold">
+              Andi Rental Mobil
+            </div>
+          </div>
+          <div class="border-t-2 border-dashed border-orange-300 pt-2">
+            <p class="text-gray-600 text-sm">Nama & Tanda Tangan</p>
+          </div>
+        </div>
+      </div> -->
+
+      <!-- Footer -->
+      <div class="bg-gradient-to-r from-orange-500 to-orange-400 p-3 mt-8 text-center rounded">
+        <p class="text-white text-sm">
+          Dokumen ini dibuat secara elektronik dan sah tanpa tanda tangan basah
+        </p>
+      </div>
+    </div>
+  </body>
+</html>
