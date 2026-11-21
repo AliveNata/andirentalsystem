@@ -1,149 +1,172 @@
 // index.js
+require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
 const pool = require('./db');
-require('dotenv').config();
 const bcrypt = require('bcrypt');
 const cors = require('cors');
-const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const nodemailer = require('nodemailer');
+const {
+  requireRole, actor, apiGate, refreshSessionUser, sameOriginWrites, employeeChangeDenied, redactLogChanges,
+  MANAGERS, ASSIGNABLE_LEVELS, ALLOWED_ORIGINS, SESSION_COOKIE, COOKIE_OPTIONS,
+} = require('./lib/auth');
+const uploads = require('./lib/uploads');
+const { isBookingCodeConflict, withBookingCode } = require('./lib/bookingCode');
+const { LOOKUP_SQL, parseLookupQuery } = require('./lib/customerLookup');
+const { deliverEmail } = require('./lib/mailer');
+const {
+  WEB_CONFIG_FIELDS, FIELD_BY_KEY, parseWebConfigInput, rowsToConfig, publicConfig, signatoryFrom,
+} = require('./lib/webConfig');
+const { computeTotals } = require('./project/src/lib/pricing.mjs');
 const { generateInvoiceEmail } = require('./project/src/components/emailTemplates/invoiceTemplate.cjs');
+const { generateReceiptEmail, generateReceiptText } = require('./project/src/components/emailTemplates/receiptTemplate.cjs');
+const { ADMIN_WHATSAPP, SIGNATORY } = require('./project/src/components/emailTemplates/brand.cjs');
+const { safeSubject } = require('./project/src/components/emailTemplates/htmlSafe.cjs');
 
+const SESSION_SECRET = process.env.SESSION_SECRET;
+if (!SESSION_SECRET || SESSION_SECRET.length < 32) {
+  console.error('SESSION_SECRET wajib diisi di .env, minimal 32 karakter.');
+  process.exit(1);
+}
 
-// const upload = multer({ dest: 'uploads/' })
-
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const app = express();
+app.disable('x-powered-by');
 
-const deleteFileIfExists = (filename) => {
-  if (!filename) return;
-  const filePath = path.join(__dirname, 'uploads', filename);
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
-    console.log(`Deleted file: ${filePath}`);
-  }
-};
-
-app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-app.get('/preview/:filename', (req, res) => {
-  const filePath = path.join(__dirname, 'uploads', req.params.filename);
-  const ext = path.extname(filePath).toLowerCase();
-
-  if (ext === '.pdf') {
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'inline');
-  }
-
-  res.sendFile(filePath);
-});
-
-
-app.use('/uploads', express.static('uploads'));
-
+app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(session({
-  secret: 'andi_rental_secret',
+  name: SESSION_COOKIE,
+  secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false, sameSite: 'lax' },
+  rolling: true,
+  cookie: { ...COOKIE_OPTIONS, maxAge: 8 * 60 * 60 * 1000 },
 }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use('/api', apiGate);
+app.use('/api', sameOriginWrites(ALLOWED_ORIGINS));
+
+// Every :id in this API is a uuid; rejecting others early avoids pg 22P02 turning into a 500.
+app.param('id', (req, res, next, id) => {
+  if (!UUID_RE.test(id)) return res.status(400).json({ message: 'ID tidak valid.' });
+  return next();
+});
+
+// Out-of-range or non-numeric values fall back to the default instead of reaching LIMIT/OFFSET.
+function parsePaging(query, defaultLimit = 5) {
+  const limit = Number(query.limit);
+  const offset = Number(query.offset);
+  return {
+    limit: Number.isInteger(limit) && limit >= 1 && limit <= 100 ? limit : defaultLimit,
+    offset: Number.isInteger(offset) && offset >= 0 ? offset : 0,
+  };
+}
+
+function parseJsonList(value) {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 app.get('/', (req, res) => {
   res.send('Andi Rental API is running.');
 });
 
 app.post('/api/login', async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password } = req.body || {};
+  if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
+    return res.status(400).json({ success: false, message: 'Username dan password wajib diisi.' });
+  }
   try {
-    const result = await pool.query('SELECT * FROM dim_user WHERE username = $1', [username]);
+    const result = await pool.query('select id, username, level, password from dim_user where username = $1', [username]);
     const user = result.rows[0];
-    if (!user || !bcrypt.compareSync(password, user.password)) {
+    const valid = user ? await bcrypt.compare(password, user.password) : false;
+    if (!valid) {
       return res.status(401).json({ success: false, message: 'Username atau password salah' });
     }
-    req.session.user = { id: user.id, username: user.username, level: user.level };
-    res.json({
-      success: true,
-      id: user.id,
-      username: user.username,
-      level: user.level
+    // New session id on login so a pre-login cookie cannot be reused (session fixation).
+    req.session.regenerate((err) => {
+      if (err) {
+        console.error('Gagal membuat sesi:', err);
+        return res.status(500).json({ success: false, message: 'Login gagal. Coba lagi.' });
+      }
+      req.session.user = { id: user.id, username: user.username, level: user.level };
+      return req.session.save((saveErr) => {
+        if (saveErr) {
+          console.error('Gagal menyimpan sesi:', saveErr);
+          return res.status(500).json({ success: false, message: 'Login gagal. Coba lagi.' });
+        }
+        return res.json({ success: true, id: user.id, username: user.username, level: user.level });
+      });
     });
   } catch (err) {
-    res.status(500).json({ success: false });
+    console.error('ERROR POST /api/login:', err);
+    res.status(500).json({ success: false, message: 'Login gagal. Coba lagi.' });
   }
 });
 
-app.get('/api/me', (req, res) => {
-  if (req.session.user) {
-    res.json({ loggedIn: true, user: req.session.user });
-  } else {
-    res.status(401).json({ loggedIn: false });
+app.get('/api/me', async (req, res) => {
+  if (!req.session.user) return res.status(401).json({ loggedIn: false });
+  try {
+    const user = await refreshSessionUser(req);
+    if (user) return res.json({ loggedIn: true, user });
+    return req.session.destroy((err) => {
+      if (err) console.error('Gagal mengakhiri sesi:', err);
+      res.clearCookie(SESSION_COOKIE, COOKIE_OPTIONS);
+      res.status(401).json({ loggedIn: false });
+    });
+  } catch (err) {
+    console.error('ERROR GET /api/me:', err);
+    return res.status(500).json({ message: 'Terjadi kesalahan di server.' });
   }
 });
 
 app.post('/api/logout', (req, res) => {
-  req.session.destroy();
-  res.json({ success: true });
+  req.session.destroy((err) => {
+    if (err) {
+      console.error('Gagal logout:', err);
+      return res.status(500).json({ success: false, message: 'Logout gagal. Coba lagi.' });
+    }
+    res.clearCookie(SESSION_COOKIE, COOKIE_OPTIONS);
+    return res.json({ success: true });
+  });
 });
 
-// Upload configuration
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = 'uploads/';
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname); // ⬅️ AMBIL ekstensi dari file asli (.jpg / .pdf)
-    const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1e9) + ext; // ⬅️ GABUNGKAN
-    cb(null, uniqueName);
-  }
-});
+app.get('/api/files/:filename', uploads.serveUploadedFile);
 
+// POST /api/cars
+app.post('/api/cars', uploads.uploadCarPhotos, async (req, res) => {
+  const who = actor(req);
+  const {
+    name, brand, type, transmission, fuel,
+    seats, daily_rate, monthly_rate, deposit, quantity
+  } = req.body;
 
-const upload = multer({ storage });
-
-// POST /cars
-app.post('/api/cars', upload.fields([
-  { name: 'image', maxCount: 4 }
-]), async (req, res) => {
+  let colors;
+  let plates;
   try {
-    const {
-      name, brand, type, transmission, fuel,
-      seats, daily_rate, monthly_rate, deposit, quantity, user_id
-    } = req.body;
+    colors = JSON.parse(req.body.colors || '[]');
+    plates = JSON.parse(req.body.plates || '[]');
+  } catch {
+    colors = null;
+  }
+  if (!Array.isArray(colors) || !Array.isArray(plates)) {
+    await uploads.removeRequestFiles(req);
+    return res.status(400).json({ message: 'Format warna atau plat nomor tidak valid.' });
+  }
 
-    // Parse manual jika datang dalam bentuk string
-    // const colors = JSON.parse(req.body.colors || '[]');
-    // const plates = JSON.parse(req.body.plates || '[]');
+  const imageFiles = req.files?.image?.map(file => file.filename) || [];
+  let saved = false;
 
-    // ✅ Parse dan validasi colors & plates
-    const colors = JSON.parse(req.body.colors || '[]');
-    const plates = JSON.parse(req.body.plates || '[]');
-
-    if (!Array.isArray(colors)) {
-      throw new Error('colors harus array!');
-    }
-    if (!Array.isArray(plates)) {
-      throw new Error('plates harus array!');
-    }
-
-    if (!user_id) {
-      return res.status(400).json({ message: 'user_id wajib dikirim' });
-    }
-
-    const imageFiles = req.files?.image?.map(file => file.filename) || [];
-
-    // ✅ Logging seperti di PUT
-    console.log('BODY:', req.body);
-    console.log('FILES:', req.files);
-    console.log('colors:', colors);
-    console.log('plates:', plates);
-    console.log('user_id:', user_id);
-
+  try {
     const result = await pool.query(`
       INSERT INTO dim_car (
         name, brand, type, transmission, fuel,
@@ -155,18 +178,16 @@ app.post('/api/cars', upload.fields([
       Number(seats), Number(daily_rate), Number(monthly_rate),
       Number(deposit), Number(quantity),
       JSON.stringify(imageFiles),
-      JSON.stringify(colors || []),
-      JSON.stringify(plates || []),
-      req.body.created_by
+      JSON.stringify(colors),
+      JSON.stringify(plates),
+      who.username
     ]);
-    
+    saved = true;
+
     const insertedCar = result.rows[0];
 
-    if (!user_id) {
-      return res.status(400).json({ error: 'User ID wajib diisi.' });
-    }
     await pool.query(`
-      INSERT INTO history_log_v1 (
+      INSERT INTO history_log (
         log_id, entity, action, changes, user_id, page
       ) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
     `, [
@@ -174,54 +195,49 @@ app.post('/api/cars', upload.fields([
       'car',
       'CREATE',
       JSON.stringify({ after: insertedCar, before: null }),
-      req.body.user_id,
+      who.id,
       'Manajemen Mobil'
     ]);
 
     res.status(201).json(insertedCar);
-
   } catch (err) {
     console.error('ERROR POST /api/cars:', err);
-    res.status(500).json({ success: false });
+    if (!saved) await uploads.removeRequestFiles(req);
+    res.status(500).json({ message: 'Gagal menyimpan data mobil.' });
   }
 });
 
-// PUT /cars/:id
-// app.put('/api/cars/:id', async (req, res) => {
-app.put('/api/cars/:id', upload.array('image'), async (req, res) => {
+// PUT /api/cars/:id
+app.put('/api/cars/:id', uploads.uploadCarPhotosArray, async (req, res) => {
+  const who = actor(req);
+  const id = req.params.id;
+
+  let colors;
+  let plates;
   try {
-    const id = req.params.id;
+    colors = JSON.parse(req.body.colors || '[]');
+    plates = JSON.parse(req.body.plates || '[]');
+  } catch {
+    colors = null;
+  }
+  if (!Array.isArray(colors) || !Array.isArray(plates)) {
+    await uploads.removeRequestFiles(req);
+    return res.status(400).json({ message: 'Format warna atau plat nomor tidak valid.' });
+  }
 
-    // ✅ Parse dan validasi colors & plates
-    const colors = JSON.parse(req.body.colors || '[]');
-    const plates = JSON.parse(req.body.plates || '[]');
-    
-    if (!Array.isArray(colors)) {
-      throw new Error('colors harus array!');
-    }
-    if (!Array.isArray(plates)) {
-      throw new Error('plates harus array!');
-    }
-
-    // ✅ Logging untuk debug
-    console.log("BODY:", req.body);
-    console.log("FILES:", req.files);
-    console.log("colors:", colors);
-    console.log("plates:", plates);
-
-    // ✅ Ambil data lama sebelum update
+  let saved = false;
+  try {
     const beforeResult = await pool.query('SELECT * FROM dim_car WHERE id = $1', [id]);
     const before = beforeResult.rows[0];
 
     if (!before) {
+      await uploads.removeRequestFiles(req);
       return res.status(404).json({ message: 'Data mobil tidak ditemukan.' });
     }
 
-    // ✅ Simpan gambar
     const imageFiles = req.files?.map(file => file.filename) || [];
     const image = imageFiles.length > 0 ? JSON.stringify(imageFiles) : before.image;
 
-    // ✅ Update ke database
     await pool.query(`
       UPDATE dim_car SET
         name = $1,
@@ -254,47 +270,41 @@ app.put('/api/cars/:id', upload.array('image'), async (req, res) => {
       image,
       JSON.stringify(colors),
       JSON.stringify(plates),
-      req.body.updated_by,
+      who.username,
       id
     ]);
-    
+    saved = true;
 
-    // 3. Simpan log aktivitas
-    const user_id = req.body.user_id || req.headers['x-user-id'] || req.body.updated_by;
-    const after = req.body;
-
-    if (!user_id) {
-      return res.status(400).json({ error: 'User ID wajib diisi.' });
+    if (imageFiles.length > 0) {
+      const oldImages = parseJsonList(before.image).filter(name => !imageFiles.includes(name));
+      await Promise.all(oldImages.map(uploads.deleteFileIfExists));
     }
 
     await pool.query(`
-      INSERT INTO history_log_v1 (
+      INSERT INTO history_log (
         log_id, entity, action, changes, user_id, page
       ) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
     `, [
       id,
       'car',
       'UPDATE',
-      JSON.stringify({ before, after }),
-      user_id,
+      JSON.stringify({ before, after: { ...req.body, image, updated_by: who.username } }),
+      who.id,
       'Manajemen Mobil'
     ]);
 
     res.status(200).json({ message: 'Data mobil berhasil diperbarui.' });
   } catch (error) {
-    console.error(error);
+    console.error('ERROR PUT /api/cars/:id:', error);
+    if (!saved) await uploads.removeRequestFiles(req);
     res.status(500).json({ message: 'Gagal memperbarui data mobil.' });
   }
 });
 
-
-// DELETE /cars/:id
-app.delete('/cars/:id', async (req, res) => {
+// DELETE /api/cars/:id
+app.delete('/api/cars/:id', async (req, res) => {
+  const who = actor(req);
   const { id } = req.params;
-  const { user_id, username } = req.body;
-
-  console.log("DELETE user_id:", user_id);
-  console.log("DELETE username:", username);
 
   try {
     const result = await pool.query('SELECT * FROM dim_car WHERE id = $1', [id]);
@@ -307,7 +317,7 @@ app.delete('/cars/:id', async (req, res) => {
     await pool.query('DELETE FROM dim_car WHERE id = $1', [id]);
 
     await pool.query(`
-      INSERT INTO history_log_v1 (
+      INSERT INTO history_log (
         log_id, entity, action, changes, user_id, page
       ) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
     `, [
@@ -316,31 +326,32 @@ app.delete('/cars/:id', async (req, res) => {
       'DELETE',
       JSON.stringify({
         before,
-        reason: `Dihapus oleh ${username || 'unknown'}`
+        reason: `Dihapus oleh ${who.username}`
       }),
-      user_id, 
+      who.id,
       'Manajemen Mobil'
     ]);
 
     res.json({ success: true });
   } catch (err) {
-    console.error('ERROR DELETE /cars/:id', err);
-    res.status(500).json({ success: false });
+    console.error('ERROR DELETE /api/cars/:id', err);
+    res.status(500).json({ success: false, message: 'Gagal menghapus mobil.' });
   }
 });
 
-// GET /cars
-app.get('/cars', async (req, res) => {
+// GET /api/cars
+app.get('/api/cars', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM dim_car ORDER BY created_at DESC');
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ success: false });
+    console.error('ERROR GET /api/cars:', err);
+    res.status(500).json({ success: false, message: 'Gagal mengambil data mobil.' });
   }
 });
 
-// GET /cars/:id
-app.get('/cars/:id', async (req, res) => {
+// GET /api/cars/:id
+app.get('/api/cars/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const result = await pool.query('SELECT * FROM dim_car WHERE id = $1', [id]);
@@ -349,209 +360,200 @@ app.get('/cars/:id', async (req, res) => {
     }
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('ERROR GET /cars/:id:', err);
+    console.error('ERROR GET /api/cars/:id:', err);
     res.status(500).json({ message: 'Gagal mengambil data mobil.' });
   }
 });
 
-// POST /api/customer
-app.post('/api/customer', upload.fields([
-  { name: 'ktpFile', maxCount: 1 },
-  { name: 'simFile', maxCount: 1 },
-  { name: 'kkFile', maxCount: 1 },
-  { name: 'workOrStudentIdFile', maxCount: 1 },
-  { name: 'parentKtpFile', maxCount: 1 },
-  { name: 'spouseKtpFile', maxCount: 1 },
-  { name: 'personalIdFile', maxCount: 1 },
-  { name: 'marriageDocFile', maxCount: 1 },
-  { name: 'picKtpFile', maxCount: 1 },
-  { name: 'picKkFile', maxCount: 1 },
-  { name: 'companyNpwpFile', maxCount: 1 },
-  { name: 'companySiupFile', maxCount: 1 },
-  { name: 'companyNibFile', maxCount: 1 },
-  { name: 'companyPhotoFile', maxCount: 1 },
-  { name: 'passportFile', maxCount: 1 },
-  { name: 'kitasKitapFile', maxCount: 1 },
-  { name: 'visaFile', maxCount: 1 },
-  { name: 'ticketFile', maxCount: 1 },
-  { name: 'ticketHotelFile', maxCount: 1 },
-  { name: 'housePhotoFile', maxCount: 1 },
-  { name: 'workIdFile', maxCount: 1 },
-  { name: 'verificationVideoFile', maxCount: 1 },
-  { name: 'optionalRequirementFile', maxCount: 1 },
-]), async (req, res) => {
+// booking_code is not read from the body: withBookingCode assigns it at insert time.
+const BOOKING_TEXT_FIELDS = ['email', 'name', 'whatsapp', 'address', 'identity_type', 'car_type'];
+// Reorder copies these from the locked dim_cust row, so whatever the body says is ignored (N3).
+const CUSTOMER_FIELDS = ['email', 'name', 'whatsapp', 'address', 'identity_type', 'company_address'];
+const BOOKING_AMOUNT_FIELDS = ['deposit', 'discount', 'trip_fee', 'driver_fee', 'delivery_fee', 'pickup_fee'];
+const BOOKING_FLAGS = ['needs_trip', 'needs_driver', 'needs_delivery', 'needs_pickup'];
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_RE = /^\d{2}:\d{2}(:\d{2})?$/;
+// Postgres rejects these at insert time (impossible date or time, bad number): bad input, not a server fault.
+const PG_INVALID_INPUT = new Set(['22007', '22008', '22P02']);
+
+// Multipart sends strings, the reorder JSON sends numbers and booleans; both land here.
+function bodyText(value) {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return '';
+}
+
+// Per-field ceiling for any money value; far above a real rental, low enough to catch typos and 1e300.
+const AMOUNT_MAX = 10_000_000_000;
+// Plain digits with an optional fraction only: Number() alone would accept '1e3', '0x10' and 'Infinity'.
+const PLAIN_DECIMAL_RE = /^\d+(\.\d+)?$/;
+const PLAIN_INTEGER_RE = /^\d+$/;
+
+function parseAmount(value, required = false) {
+  const raw = bodyText(value);
+  if (raw === '') {
+    const empty = value === undefined || value === null || value === '';
+    return { ok: empty && !required, value: 0 };
+  }
+  const n = Number(raw);
+  return { ok: PLAIN_DECIMAL_RE.test(raw) && n <= AMOUNT_MAX, value: n };
+}
+
+// Returns the cleaned booking plus every invalid field name; nothing is written before this passes.
+function parseBookingBody(body) {
+  const invalid = new Set();
+  const data = {};
+
+  for (const key of BOOKING_TEXT_FIELDS) {
+    data[key] = bodyText(body[key]);
+    if (!data[key]) invalid.add(key);
+  }
+  data.company_address = bodyText(body.company_address) || null;
+  data.purpose = bodyText(body.purpose) || null;
+
+  data.rental_duration = bodyText(body.rental_duration);
+  if (!['daily', 'monthly'].includes(data.rental_duration)) invalid.add('rental_duration');
+
+  const rangeRent = bodyText(body.range_rent);
+  data.range_rent = Number(rangeRent);
+  if (!PLAIN_INTEGER_RE.test(rangeRent) || data.range_rent < 1) invalid.add('range_rent');
+
+  for (const key of ['start_date', 'end_date']) {
+    data[key] = bodyText(body[key]);
+    if (!DATE_RE.test(data[key])) invalid.add(key);
+  }
+  // Same-width YYYY-MM-DD strings sort like dates; impossible days are still left to Postgres.
+  if (!invalid.has('start_date') && !invalid.has('end_date') && data.end_date < data.start_date) {
+    invalid.add('end_date');
+  }
+  data.start_time = bodyText(body.start_time) || null;
+  if (data.start_time && !TIME_RE.test(data.start_time)) invalid.add('start_time');
+
+  const rentalCost = parseAmount(body.rental_cost, true);
+  data.rental_cost = rentalCost.value;
+  if (!rentalCost.ok) invalid.add('rental_cost');
+
+  for (const key of BOOKING_AMOUNT_FIELDS) {
+    const parsed = parseAmount(body[key]);
+    data[key] = parsed.value;
+    if (!parsed.ok) invalid.add(key);
+  }
+  for (const key of BOOKING_FLAGS) {
+    data[key] = body[key] === true || body[key] === 'true';
+  }
+
+  return { data, invalid: [...invalid] };
+}
+
+// grand_total and inactive fees always come from computeTotals; client totals are ignored (K8).
+async function insertTransaction(client, data, customerId, who) {
+  const totals = computeTotals(data);
+  const result = await client.query(`
+    insert into fact_transaction (
+      booking_code, customer_id, email, rental_duration, range_rent, car_type,
+      needs_trip, needs_driver, needs_delivery, needs_pickup,
+      start_date, start_time, end_date,
+      rental_cost, grand_total, deposit, discount, trip_fee, driver_fee, delivery_fee, pickup_fee,
+      purpose, identity_type, name, whatsapp, address, company_address, created_by
+    ) values (
+      $1, $2, $3, $4, $5, $6,
+      $7, $8, $9, $10,
+      $11, $12, $13,
+      $14, $15, $16, $17, $18, $19, $20, $21,
+      $22, $23, $24, $25, $26, $27, $28
+    ) returning *
+  `, [
+    data.booking_code, customerId, data.email, data.rental_duration, data.range_rent, data.car_type,
+    data.needs_trip, data.needs_driver, data.needs_delivery, data.needs_pickup,
+    data.start_date, data.start_time, data.end_date,
+    totals.rental_cost, totals.grand_total, totals.deposit, totals.discount_applied,
+    totals.trip_fee, totals.driver_fee, totals.delivery_fee, totals.pickup_fee,
+    data.purpose, data.identity_type, data.name, data.whatsapp, data.address, data.company_address, who.username,
+  ]);
+  return result.rows[0];
+}
+
+async function rollbackQuietly(client) {
   try {
-    const {
-      booking_code,
-      email,
-      rental_duration,
-      car_type,
-      needs_driver,
-      needs_delivery,
-      needs_pickup,
-      driver_fee,
-      delivery_fee,
-      pickup_fee,
-      deposit,
-      discount,
-      grand_total,
-      start_date,
-      start_time,
-      end_date,
-      purpose,
-      identity_type,
-      name,
-      whatsapp,
-      address,
-      company_address,
-      range_rent,
-      username
-    } = req.body;
+    await client.query('rollback');
+  } catch (err) {
+    console.error('Rollback gagal:', err.message);
+  }
+}
 
-       // 👇 DI SINI tempat kode dokumen!
-       const documents = {};
-       for (const key in req.files) {
-         if (req.files[key][0]) {
-           documents[key] = req.files[key][0].filename;
-         }
-       }
-       
-       console.log('=== DATA YANG DITERIMA ===');
-       console.log('Body:', req.body);
-       console.log('Files:', req.files);
-       console.log('Documents:', documents);
-       console.log('===========================');
+function sendBookingError(err, res, label) {
+  // Only reached after withBookingCode used up its retries on generated codes.
+  if (isBookingCodeConflict(err)) {
+    return res.status(409).json({ message: 'Kode booking sudah dipakai.' });
+  }
+  if (PG_INVALID_INPUT.has(err.code)) {
+    return res.status(400).json({ message: `Data ${label} tidak valid.` });
+  }
+  console.error(`ERROR simpan ${label}:`, err);
+  return res.status(500).json({ message: `Gagal menyimpan ${label}.` });
+}
 
-       const result = await pool.query(`
-        INSERT INTO dim_cust (
-          email, identity_type, name,
-          whatsapp, address, company_address,
-          documents, created_at, created_by
-        ) VALUES (
-          $1, $2, $3, $4, $5,
-          $6, $7, $8, $9
-        ) RETURNING *
+// POST /api/booking: customer, transaction and both logs in one DB transaction (K5, K6).
+app.post('/api/booking', uploads.uploadDocuments, async (req, res) => {
+  const who = actor(req);
+  const { data, invalid } = parseBookingBody(req.body || {});
+  if (invalid.length > 0) {
+    await uploads.removeRequestFiles(req);
+    return res.status(400).json({ message: 'Data booking belum lengkap atau tidak valid.', fields: invalid });
+  }
+
+  const documents = {};
+  for (const [field, files] of Object.entries(req.files || {})) {
+    if (files[0]) documents[field] = files[0].filename;
+  }
+
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query('begin');
+
+    const { customer, transaction } = await withBookingCode(client, async (code) => {
+      data.booking_code = code;
+      const customerResult = await client.query(`
+        insert into dim_cust (
+          booking_code, email, identity_type, name, whatsapp, address, company_address, documents, created_by
+        ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+        returning *
       `, [
-        // booking_code,
-        email,
-        // rental_duration,
-        // car_type,
-        // needs_driver === 'true',
-        // needs_delivery === 'true',
-        // start_date,
-        // start_time,
-        // end_date,
-        // purpose,
-        identity_type,
-        name,
-        whatsapp,
-        address,
-        company_address,
-        // Number(range_rent),
-        JSON.stringify(documents || {}),
-        new Date(),
-        username || 'system'
+        data.booking_code, data.email, data.identity_type, data.name, data.whatsapp,
+        data.address, data.company_address, JSON.stringify(documents), who.username,
       ]);
+      const created = customerResult.rows[0];
+      return { customer: created, transaction: await insertTransaction(client, data, created.id, who) };
+    });
 
-      const insertedCustomer = result.rows[0];
-
-      // const parsedRangeRent = isNaN(Number(range_rent)) ? 0 : Number(range_rent);
-      // const parsedGrandTotal = isNaN(Number(grand_total)) ? 0 : Number(grand_total);
-      // const parsedStartTime = start_time && start_time.trim() !== '' ? start_time : null;
-      // const parsedDeposit = isNaN(Number(deposit)) ? 0 : Number(deposit);
-      // const parsedDiscount = isNaN(Number(discount)) ? 0 : Number(discount);
-      // const parsedTripFee = isNaN(Number(trip_fee)) ? 0 : Number(trip_fee);
-      // const parsedDriverFee = isNaN(Number(driver_fee)) ? 0 : Number(driver_fee);
-      // const parsedDeliveryFee = isNaN(Number(delivery_fee)) ? 0 : Number(delivery_fee);
-      // const parsedPickupFee = isNaN(Number(pickup_fee)) ? 0 : Number(pickup_fee);
-
-      // console.log({
-      //   range_rent,
-      //   parsedRangeRent,
-      //   grand_total,
-      //   parsedGrandTotal
-      // });
-
-      // Inserted to fact_transaction
-      // await pool.query(`
-      //   INSERT INTO fact_transaction (
-      //     booking_code, email, rental_duration, range_rent, car_type, needs_trip, needs_driver,
-      //     needs_delivery, needs_pickup, start_date, start_time, end_date, grand_total,
-      //     deposit, discount, trip_fee, driver_fee, delivery_fee, pickup_fee, purpose,
-      //     identity_type, name, whatsapp, address, company_address,
-      //     created_at, created_by
-      //   ) VALUES (
-      //     $1, $2, $3, $4, $5, $6, $7
-      //     $8, $9, $10, $11, $12, $13
-      //     $13, $14, $15, $16, $17, $18, $19, $20,
-      //     $20, $21, $22, $23, $24, $25,
-      //     $26, $27
-      //   )
-      // `, [
-      //   booking_code,
-      //   email,
-      //   rental_duration,
-      //   parsedRangeRent,
-      //   car_type,
-      //   needs_trip === 'true',
-      //   needs_driver === 'true',
-      //   needs_delivery === 'true',
-      //   needs_pickup === 'true',
-      //   start_date,
-      //   parsedStartTime,
-      //   end_date,
-      //   parsedGrandTotal,
-      //   parsedDeposit,
-      //   parsedDiscount,
-      //   parsedTripFee,
-      //   parsedDriverFee,
-      //   parsedDeliveryFee,
-      //   parsedPickupFee,
-      //   purpose,
-      //   identity_type,
-      //   name,
-      //   whatsapp,
-      //   address,
-      //   company_address,
-      //   new Date(),
-      //   username || 'system'
-      // ]);
-      
-      // ambil user_id dari frontend (misal lewat header / body)
-      const user_id = req.body.user_id || req.headers['x-user-id'];
-
-      if (!user_id) {
-        return res.status(400).json({ error: 'User ID wajib diisi.' });
-      }
-  
-      await pool.query(`
-      INSERT INTO history_log_v1 (
-        log_id, entity, action, changes, user_id, page
-      ) VALUES ($1, $2, $3, $4::jsonb, $5::uuid, $6)
+    await client.query(`
+      insert into history_log (log_id, entity, action, changes, user_id, page)
+      values ($1, 'customer', 'CREATE', $2::jsonb, $5, 'Form Booking'),
+             ($3, 'transaction', 'CREATE', $4::jsonb, $5, 'Form Booking')
     `, [
-      insertedCustomer.id,
-      'customer',
-      'CREATE',
-      JSON.stringify({ after: insertedCustomer, before: null, created_by: username }),
-      user_id,
-      'Form Booking'
+      customer.id,
+      JSON.stringify({ after: customer, before: null, created_by: who.username }),
+      transaction.id,
+      JSON.stringify({ after: transaction, before: null, created_by: who.username }),
+      who.id,
     ]);
 
-    res.status(201).json(insertedCustomer);
-      
+    await client.query('commit');
+    return res.status(201).json({ customer, transaction });
   } catch (err) {
-    console.error('ERROR POST /api/customer:', err);
-    res.status(500).json({ message: 'Gagal menyimpan data.', error: err.message });
+    if (client) await rollbackQuietly(client);
+    await uploads.removeRequestFiles(req);
+    return sendBookingError(err, res, 'booking');
+  } finally {
+    if (client) client.release();
   }
 });
-
-
 
 // GET /api/car-types
 app.get('/api/car-types', async (req, res) => {
   try {
     const result = await pool.query('SELECT DISTINCT brand, name FROM dim_car ORDER BY brand, name');
-    console.log('Brand + name + result:', result.rows);
 
     const carTypes = result.rows.map(row => ({
       label: `${row.brand} ${row.name}`,
@@ -568,7 +570,6 @@ app.get('/api/car-types', async (req, res) => {
 app.get('/api/car-rates', async (req, res) => {
   try {
     const result = await pool.query('SELECT DISTINCT brand, name, daily_rate, monthly_rate FROM dim_car ORDER BY brand, name');
-    console.log('Brand + name + daily & monthly rate result:', result.rows);
 
     const carRates = result.rows.map(row => ({
       label: `${row.brand} ${row.name}`,
@@ -578,7 +579,7 @@ app.get('/api/car-rates', async (req, res) => {
     }));
     res.json(carRates);
   } catch (err) {
-    console.error('ERROR GET /api/car-types:', err);
+    console.error('ERROR GET /api/car-rates:', err);
     res.status(500).json({ success: false });
   }
 });
@@ -596,52 +597,48 @@ app.get('/api/customer', async (req, res) => {
   }
 });
 
-app.put('/api/customer/:id', upload.fields([
-  { name: 'ktpFile', maxCount: 1 },
-  { name: 'simFile', maxCount: 1 },
-  { name: 'kkFile', maxCount: 1 },
-  { name: 'workOrStudentIdFile', maxCount: 1 },
-  { name: 'parentKtpFile', maxCount: 1 },
-  { name: 'spouseKtpFile', maxCount: 1 },
-  { name: 'personalIdFile', maxCount: 1 },
-  { name: 'marriageDocFile', maxCount: 1 },
-  { name: 'picKtpFile', maxCount: 1 },
-  { name: 'picKkFile', maxCount: 1 },
-  { name: 'companyNpwpFile', maxCount: 1 },
-  { name: 'companySiupFile', maxCount: 1 },
-  { name: 'companyNibFile', maxCount: 1 },
-  { name: 'companyPhotoFile', maxCount: 1 },
-  { name: 'passportFile', maxCount: 1 },
-  { name: 'kitasKitapFile', maxCount: 1 },
-  { name: 'visaFile', maxCount: 1 },
-  { name: 'ticketFile', maxCount: 1 },
-  { name: 'ticketHotelFile', maxCount: 1 },
-  { name: 'housePhotoFile', maxCount: 1 },
-  { name: 'workIdFile', maxCount: 1 },
-  { name: 'verificationVideoFile', maxCount: 1 },
-  { name: 'optionalRequirementFile', maxCount: 1 },
-]), async (req, res) => {
+// GET /api/customer/lookup: returning-customer warning on the booking form. Registered before
+// /api/customer/:id so "lookup" is not taken as an id; documents and contact history stay out.
+app.get('/api/customer/lookup', async (req, res) => {
+  const { email, whatsapp, empty } = parseLookupQuery(req.query);
+  if (empty) {
+    return res.status(400).json({ message: 'Isi email atau nomor WhatsApp untuk mencari customer.' });
+  }
   try {
-    const { id } = req.params;
-    const {
-      name, email, whatsapp, address, identity_type,
-      company_address, username, user_id
-    } = req.body;
+    const result = await pool.query(LOOKUP_SQL, [email, whatsapp]);
+    res.json({ matches: result.rows });
+  } catch (err) {
+    console.error('ERROR GET /api/customer/lookup:', err);
+    res.status(500).json({ message: 'Gagal mencari data customer.' });
+  }
+});
 
-    const documents = {};
-    for (const key in req.files) {
-      if (req.files[key][0]) {
-        documents[key] = req.files[key][0].filename;
-      }
+// PUT /api/customer/:id
+app.put('/api/customer/:id', uploads.uploadDocuments, async (req, res) => {
+  const who = actor(req);
+  const { id } = req.params;
+  const {
+    name, email, whatsapp, address, identity_type,
+    company_address
+  } = req.body;
+
+  const documents = {};
+  for (const key in req.files) {
+    if (req.files[key][0]) {
+      documents[key] = req.files[key][0].filename;
     }
+  }
 
-    // Ambil data sebelum update untuk log
+  let saved = false;
+  try {
     const beforeResult = await pool.query('SELECT * FROM dim_cust WHERE id = $1', [id]);
     const before = beforeResult.rows[0];
 
-    if (!before) return res.status(404).json({ message: 'Customer tidak ditemukan.' });
+    if (!before) {
+      await uploads.removeRequestFiles(req);
+      return res.status(404).json({ message: 'Customer tidak ditemukan.' });
+    }
 
-    // Gabungkan dokumen lama & baru
     const updatedDocuments = { ...before.documents, ...documents };
 
     await pool.query(`
@@ -664,30 +661,36 @@ app.put('/api/customer/:id', upload.fields([
       identity_type,
       company_address,
       JSON.stringify(updatedDocuments),
-      username || 'system',
+      who.username,
       id
     ]);
+    saved = true;
+
+    const replaced = Object.keys(documents)
+      .map(key => before.documents?.[key])
+      .filter(oldName => oldName && !Object.values(documents).includes(oldName));
+    await Promise.all(replaced.map(uploads.deleteFileIfExists));
 
     await pool.query(`
-      INSERT INTO history_log_v1 (
+      INSERT INTO history_log (
         log_id, entity, action, changes, user_id, page
       ) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
     `, [
       id,
       'customer',
       'UPDATE',
-      JSON.stringify({ before, after: { name, email, whatsapp, address, identity_type, company_address, documents: updatedDocuments }, updated_by: username }),
-      user_id || 'system',
+      JSON.stringify({ before, after: { name, email, whatsapp, address, identity_type, company_address, documents: updatedDocuments }, updated_by: who.username }),
+      who.id,
       'Customer Database'
     ]);
 
     res.json({ message: 'Data customer berhasil diperbarui.' });
   } catch (err) {
     console.error('ERROR PUT /api/customer/:id', err);
+    if (!saved) await uploads.removeRequestFiles(req);
     res.status(500).json({ message: 'Gagal mengupdate customer.' });
   }
 });
-
 
 // GET /api/customer/:id
 app.get('/api/customer/:id', async (req, res) => {
@@ -713,19 +716,17 @@ app.get('/api/customer/:id', async (req, res) => {
 app.get('/api/customer/history/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const limit = parseInt(req.query.limit) || 5;
-    const offset = parseInt(req.query.offset) || 0;
+    const { limit, offset } = parsePaging(req.query);
 
     const result = await pool.query(`
-      SELECT * FROM history_log_v1
+      SELECT * FROM history_log
       WHERE log_id = $1 AND entity = 'customer'
       ORDER BY created_at DESC
       LIMIT $2 OFFSET $3
     `, [id, limit, offset]);
 
-    // Hitung total histori untuk pagination
     const totalResult = await pool.query(`
-      SELECT COUNT(*) FROM history_log_v1
+      SELECT COUNT(*) FROM history_log
       WHERE log_id = $1 AND entity = 'customer'
     `, [id]);
 
@@ -744,12 +745,12 @@ app.get('/api/customer/history/:id', async (req, res) => {
   }
 });
 
-
 // PUT /api/customer/delete/:id
 app.put('/api/customer/delete/:id', async (req, res) => {
+  const who = actor(req);
   try {
     const { id } = req.params;
-    const { reason, user_id, username } = req.body;
+    const { reason } = req.body;
 
     const beforeResult = await pool.query('SELECT * FROM dim_cust WHERE id = $1', [id]);
     const before = beforeResult.rows[0];
@@ -759,32 +760,32 @@ app.put('/api/customer/delete/:id', async (req, res) => {
     }
 
     await pool.query(`
-      UPDATE dim_cust 
+      UPDATE dim_cust
       SET deleted = true, delete_reason = $1, updated_at = NOW(), updated_by = $2
       WHERE id = $3
-    `, [reason, username, id]);
+    `, [reason, who.username, id]);
 
     await pool.query(`
-      INSERT INTO history_log_v1 (log_id, entity, action, changes, user_id, page)
+      INSERT INTO history_log (log_id, entity, action, changes, user_id, page)
       VALUES ($1, $2, $3, $4::jsonb, $5, $6)
     `, [
       id,
       'customer',
       'DELETE',
       JSON.stringify({
-  before: {
-    name: before.name,
-    email: before.email,
-    whatsapp: before.whatsapp,
-    address: before.address,
-    identity_type: before.identity_type,
-  },
-  after: {
-    reason: reason
-  },
-  deleted_by: `Dihapus oleh ${username}`
-}),
-      user_id || 'system', 
+        before: {
+          name: before.name,
+          email: before.email,
+          whatsapp: before.whatsapp,
+          address: before.address,
+          identity_type: before.identity_type,
+        },
+        after: {
+          reason: reason
+        },
+        deleted_by: `Dihapus oleh ${who.username}`
+      }),
+      who.id,
       'Customer Database'
     ]);
 
@@ -793,124 +794,11 @@ app.put('/api/customer/delete/:id', async (req, res) => {
     console.error('Error deleting customer:', err);
     res.status(500).json({ message: 'Gagal menghapus data customer.' });
   }
-}); 
-
-// PUT /api/customer/upload-payment/:id
-app.put('/api/customer/upload-payment/:id', upload.fields([
-  { name: 'deposit', maxCount: 1 },
-  { name: 'dp', maxCount: 1 },
-  { name: 'full', maxCount: 1 }
-]), async (req, res) => {
-  console.log('>>> MASUK /api/customer/upload-payment/', req.params.id);
-  try {
-    const { id } = req.params;
-    const { user_id, username, isLunas } = req.body;
-
-    const depositFile = req.files?.deposit?.[0];
-    const dpFile = req.files?.dp?.[0];
-    const fullFile = req.files?.full?.[0];
-
-
-    const lunas = isLunas === 'true';
-
-    // ✅ Ambil data before dari fact_transaction
-    const beforeResult = await pool.query('SELECT * FROM fact_transaction WHERE booking_code = (SELECT booking_code FROM dim_cust WHERE id = $1)', [id]);
-    const before = beforeResult.rows[0];
-
-    if (!before) {
-  return res.status(404).json({ message: 'Transaksi tidak ditemukan' });
-}
-
-  if (req.body.deleteDeposit === 'true') {
-  deleteFileIfExists(before?.deposit_payment?.filename);
-}
-if (req.body.deleteDp === 'true') {
-  deleteFileIfExists(before?.down_payment?.filename);
-}
-if (req.body.deleteFull === 'true') {
-  deleteFileIfExists(before?.full_payment?.filename);
-}
-
-// Jika upload file baru, hapus file lama sebelumnya
-if (depositFile) {
-  deleteFileIfExists(before?.deposit_payment?.filename);
-}
-if (dpFile) {
-  deleteFileIfExists(before?.down_payment?.filename);
-}
-if (fullFile) {
-  deleteFileIfExists(before?.full_payment?.filename);
-}
-
-const depositData =
-  req.body.deleteDeposit === 'true' ? null :
-  depositFile ? {
-    filename: depositFile.filename,
-    mimetype: depositFile.mimetype,
-  } : before?.deposit_payment;
-
-const dpData =
-  req.body.deleteDp === 'true' ? null :
-  dpFile ? {
-    filename: dpFile.filename,
-    mimetype: dpFile.mimetype,
-  } : before?.down_payment;
-
-const fullData =
-  req.body.deleteFull === 'true' ? null :
-  fullFile ? {
-    filename: fullFile.filename,
-    mimetype: fullFile.mimetype,
-  } : before?.full_payment;
-
-    // ✅ Update data ke fact_transaction
-    const result = await pool.query(`
-      UPDATE fact_transaction
-      SET deposit_payment = $1,
-          down_payment = $2,
-          full_payment = $3,
-          lunas = $4,
-          updated_by = $5,
-          updated_at = NOW()
-      WHERE booking_code = (SELECT booking_code FROM dim_cust WHERE id = $6)
-      RETURNING *
-    `, [
-      depositData,
-      dpData,
-      fullData,
-      lunas,
-      username,
-      id
-    ]);
-
-    const after = result.rows[0];
-
-    // ✅ Simpan ke history_log_v1
-    await pool.query(`
-      INSERT INTO history_log_v1 (
-        log_id, entity, action, changes, user_id, page
-      ) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
-    `, [
-      id,
-      'transaction',
-      'UPDATE',
-      JSON.stringify({ before, after, reason: `Upload pembayaran oleh ${username}` }),
-      user_id,
-      'Upload Bukti Pembayaran'
-    ]);
-
-    res.json({ message: 'Bukti pembayaran berhasil disimpan ke faktur transaksi.' });
-
-  } catch (err) {
-    console.error('❌ Upload payment error:', err);
-    res.status(500).json({ message: 'Gagal upload bukti pembayaran.' });
-  }
 });
 
-// GET all bank list form dim_table
 async function getAllBanks() {
   const result = await pool.query(`
-    SELECT bank_name, logo_url, account_number, account_holder_name 
+    SELECT bank_name, logo_url, account_number, account_holder_name
     FROM dim_bank
   `);
 
@@ -922,269 +810,231 @@ async function getAllBanks() {
   }));
 }
 
+// Single recipient only; the pattern rejects lists and display-name syntax.
+const EMAIL_RE = /^[^\s@,;<>"()]+@[^\s@,;<>"()]+\.[^\s@,;<>"()]+$/;
+const TERMS_PDF = path.join(__dirname, 'public', 'terms_and_conditions.pdf');
 
-// post /api/send-confirmation-email
-app.post('/api/send-confirmation-email', async (req, res) => {
-  const { 
-    to,
-    customerName,
-    bookingCode,
-    carType,
-    startDate,
-    startTime,
-    endDate,
-    deposit,
-    discount,
-    needsTrip,
-    needsDriver,
-    needsDelivery,
-    needsPickup,
-    rentalCost,
-    tripFee,
-    driverFee,
-    deliveryFee,
-    pickupFee,
-    grandTotal
-   } = req.body;
+// Column names are fixed here and never come from the request.
+const EMAIL_KINDS = {
+  invoice: {
+    logColumn: 'invoice_logs',
+    throttled: 'Invoice baru saja dikirim. Coba lagi setelah 10 menit.',
+    sent: 'Invoice terkirim.',
+  },
+  receipt: {
+    logColumn: 'receipt_logs',
+    throttled: 'Bukti pembayaran untuk transaksi ini baru saja dikirim. Coba lagi setelah 10 menit.',
+    sent: 'Receipt terkirim.',
+  },
+};
 
-   
+async function resolveRecipient(row) {
+  let email = typeof row.email === 'string' ? row.email.trim() : '';
+  if (!email && row.customer_id) {
+    const result = await pool.query('select email from dim_cust where id = $1 and deleted = false', [row.customer_id]);
+    email = (result.rows[0]?.email || '').trim();
+  }
+  if (!email || email.length > 254 || !EMAIL_RE.test(email)) return null;
+  return email;
+}
 
-  try {
-
-      const result = await pool.query(
-      'SELECT invoice_logs FROM fact_transaction WHERE booking_code = $1',
-      [bookingCode]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Transaksi tidak ditemukan' });
-    }
-
-    let invoiceLogs = result.rows[0].invoice_logs || [];
-    const now = new Date();
-    const lastSent = invoiceLogs.slice(-1)[0];
-
-    // ⛔ BLOKIR JIKA INVOICE BARU SAJA DIKIRIM < 10 MENIT
-    if (lastSent && new Date(lastSent) > new Date(now.getTime() - 10 * 60000)) {
-      return res.status(429).json({ error: 'Invoice baru saja dikirim. Silakan tunggu 10 menit.' });
-    }
-
-    // 1. Buat transporter
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: 'andirentalmobilbi@gmail.com',
-        pass: 'nxvt jqzi bmvq ytzb', // App Password Gmail
-      },
-    });
-
-    // 2. Buat subject dan html email
-    const bankList = await getAllBanks();
-    const subject = `Konfirmasi Booking "${bookingCode}" Anda - Andi Rental Mobil`;
-
-    const logoResult = await pool.query(`
-      SELECT url_image FROM dim_web_config WHERE description = 'Logo' LIMIT 1
-    `);
-    const logoUrl = logoResult.rows[0]?.url_image || 'https://default/logo.png';
-
-    const html = generateInvoiceEmail({
-      customerName,
-      bookingCode,
-      carType,
-      startDate,
-      startTime,
-      endDate,
-      deposit,
-      discount,
-      needsTrip,
-      needsDriver,
-      needsDelivery,
-      needsPickup,
-      rentalCost,
-      tripFee,
-      driverFee,
-      deliveryFee,
-      pickupFee,
-      grandTotal,
-      bankList,
-      logoUrl
-    });
-
-    const filePath = path.join(__dirname, 'public', 'terms_and_conditions.pdf');
-    if (!fs.existsSync(filePath)) {
-    console.log("❌ PDF belum ada!");
-  } else {
-    console.log("✅ PDF ditemukan!");
+async function sendTransactionEmail(kind, req, res) {
+  const cfg = EMAIL_KINDS[kind];
+  const transactionId = req.body?.transaction_id;
+  if (typeof transactionId !== 'string' || !UUID_RE.test(transactionId)) {
+    return res.status(400).json({ message: 'transaction_id tidak valid.' });
   }
 
-    // 3. Kirim email
-    await transporter.sendMail({
-      from: '"Andi Rental Mobil" <noreply@andirentalmobil.com>',
-      to,
-      subject,
-      html,
-      attachments: [
-        {
+  try {
+    const result = await pool.query(`
+      select id, booking_code, customer_id, email, name, car_type,
+             to_char(start_date, 'YYYY-MM-DD') as start_date, start_time,
+             to_char(end_date, 'YYYY-MM-DD') as end_date,
+             rental_duration, range_rent, needs_trip, needs_driver, needs_delivery, needs_pickup,
+             rental_cost, discount, deposit, trip_fee, driver_fee, delivery_fee, pickup_fee,
+             grand_total, lunas, deleted
+        from fact_transaction
+       where id = $1
+    `, [transactionId]);
+    const row = result.rows[0];
+    if (!row || row.deleted) {
+      return res.status(404).json({ message: 'Transaksi tidak ditemukan.' });
+    }
+
+    const to = await resolveRecipient(row);
+    if (!to) {
+      return res.status(422).json({ message: 'Email customer belum ada atau tidak valid.' });
+    }
+
+    if (row.rental_cost === null) {
+      return res.status(422).json({ message: 'Rincian biaya transaksi belum lengkap.' });
+    }
+    let totals;
+    try {
+      totals = computeTotals(row);
+    } catch (err) {
+      console.error(`Angka transaksi ${row.id} tidak valid:`, err.message);
+      return res.status(422).json({ message: 'Rincian biaya transaksi belum lengkap.' });
+    }
+    if (totals.grand_total !== Number(row.grand_total)) {
+      console.error(`Total transaksi ${row.id} tidak konsisten: hitung ${totals.grand_total}, tersimpan ${row.grand_total}`);
+      return res.status(422).json({ message: 'Total transaksi tidak konsisten.' });
+    }
+
+    if (kind === 'receipt' && row.lunas !== true) {
+      return res.status(409).json({ message: 'Receipt hanya untuk transaksi yang sudah lunas.' });
+    }
+
+    const webConfig = await loadWebConfig();
+
+    const templateData = {
+      bookingCode: row.booking_code,
+      customerName: row.name,
+      carType: row.car_type,
+      startDate: row.start_date,
+      startTime: row.start_time,
+      endDate: row.end_date,
+      needs: {
+        trip: row.needs_trip === true,
+        driver: row.needs_driver === true,
+        delivery: row.needs_delivery === true,
+        pickup: row.needs_pickup === true,
+      },
+      totals,
+      logoUrl: webConfig.logo,
+      adminWhatsapp: ADMIN_WHATSAPP,
+    };
+
+    const bookingCode = safeSubject(row.booking_code);
+    let subject;
+    let html;
+    let text;
+    const attachments = [];
+    if (kind === 'invoice') {
+      subject = `Konfirmasi Booking ${bookingCode} - Andi Rental Mobil`;
+      html = generateInvoiceEmail({ ...templateData, bankList: await getAllBanks() });
+      if (fs.existsSync(TERMS_PDF)) {
+        attachments.push({
           filename: 'Syarat-dan-Ketentuan-Andi-Rental-Mobil.pdf',
-          path: filePath,
+          path: TERMS_PDF,
           contentType: 'application/pdf'
-        }
-      ]
-    });
+        });
+      } else {
+        console.warn('Lampiran syarat dan ketentuan tidak ditemukan, invoice dikirim tanpa lampiran.');
+      }
+    } else {
+      subject = `Bukti pembayaran lunas untuk booking ${bookingCode}`;
+      const receiptData = {
+        ...templateData,
+        issuedAt: new Date(),
+        signatureUrl: webConfig.signature,
+        signatory: signatoryFrom(webConfig, SIGNATORY),
+      };
+      html = generateReceiptEmail(receiptData);
+      text = generateReceiptText(receiptData);
+    }
 
-    // ✅ SIMPAN LOG INVOICE KIRIM
-    invoiceLogs.push(now.toISOString());
+    // Claim the send slot atomically so a double click cannot send twice.
+    const claimedAt = new Date().toISOString();
+    const claim = await pool.query(`
+      update fact_transaction
+         set ${cfg.logColumn} = ${cfg.logColumn} || jsonb_build_array($2::text)
+       where id = $1
+         and deleted = false
+         and (jsonb_array_length(${cfg.logColumn}) = 0
+              or (${cfg.logColumn} ->> -1)::timestamptz <= now() - interval '10 minutes')
+      returning id
+    `, [row.id, claimedAt]);
+    if (claim.rowCount === 0) {
+      return res.status(429).json({ message: cfg.throttled });
+    }
 
-    await pool.query(
-      'UPDATE fact_transaction SET invoice_logs = $1 WHERE booking_code = $2',
-      [JSON.stringify(invoiceLogs), bookingCode]
-    );
+    let delivery;
+    try {
+      delivery = await deliverEmail({ kind, transactionId: row.id, to, subject, html, text, attachments });
+    } catch (err) {
+      console.error(`Gagal mengirim ${kind} untuk transaksi ${row.id}:`, err.message);
+      await pool.query(`
+        update fact_transaction
+           set ${cfg.logColumn} = ${cfg.logColumn} - (jsonb_array_length(${cfg.logColumn}) - 1)
+         where id = $1 and ${cfg.logColumn} ->> -1 = $2
+      `, [row.id, claimedAt]);
+      return res.status(500).json({ message: 'Email gagal dikirim.' });
+    }
 
-    res.status(200).json({ message: 'Invoice berhasil dikirim!' });
-  } catch (error) {
-    console.error('Email send error:', error);
-    res.status(500).json({ message: 'Invoice mengirim email.' });
-  }
-});
-
-
-app.post('/api/send-receipt-email', async (req, res) => {
-  const {
-    to,
-    customerName,
-    bookingCode,
-    carType,
-    startDate,
-    startTime,
-    endDate,
-    grandTotal,
-  } = req.body;
-
-  try {
-    const htmlPath = path.join(__dirname, 'templates', 'receipt-template.html');
-    let html = fs.readFileSync(htmlPath, 'utf8');
-
-    // Inject data ke dalam HTML
-  const safeStartTime = startTime ? `${startTime} WIB` : '-';
-
-
-   html = html
-  .replace(/\[CUSTOMER_NAME\]/g, customerName)
-  .replace(/<div[^>]*id="customerName"[^>]*>.*?<\/div>/i, `<div id="customerName">${customerName}</div>`)
-  .replace(/<div[^>]*id="customerNameDetail"[^>]*>.*?<\/div>/i, `<div id="customerNameDetail">${customerName}</div>`)
-  .replace(/<div[^>]*id="customerSignature"[^>]*>.*?<\/div>/i, `<div id="customerSignature">${customerName}</div>`)
-  .replace(/<div[^>]*id="bookingCode"[^>]*>.*?<\/div>/i, `<div id="bookingCode">${bookingCode}</div>`)
-  .replace(/<div[^>]*id="carType"[^>]*>.*?<\/div>/i, `<div id="carType">${carType}</div>`)
-  .replace(/<div[^>]*id="rentalPeriod"[^>]*>.*?<\/div>/i, `<div id="rentalPeriod">${startDate} - ${endDate}</div>`)
-  .replace(/<div[^>]*id="startTime"[^>]*>.*?<\/div>/i, `<div id="startTime">${safeStartTime}</div>`)
-  .replace(/<div[^>]*id="grandTotal"[^>]*>.*?<\/div>/i, `<div id="grandTotal">Rp ${parseInt(grandTotal).toLocaleString('id-ID')}</div>`)
-  .replace(/<div[^>]*id="currentDate"[^>]*>.*?<\/div>/i, `<div id="currentDate">${new Date().toLocaleDateString('id-ID')}</div>`)
-  .replace(/<p[^>]*id="receipt-date"[^>]*>.*?<\/p>/i,
-           `<p id="receipt-date">${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</p>`);
-
-  // Ambil gambar "Lunas" dan "Tanda Tangan" dari DB
-    const configResult = await pool.query(`
-      SELECT description, url_image FROM dim_web_config 
-      WHERE description IN ('Logo', 'Lunas', 'Tanda Tangan')
-    `);
-    const configImages = {};
-    configResult.rows.forEach(row => {
-      configImages[row.description] = row.url_image;
-    });
-
-    const logoUrl = configImages['Logo'] || '';
-    const lunasUrl = configImages['Lunas'] || '';
-    const signatureUrl = configImages['Tanda Tangan'] || '';
-
-    // Ganti placeholder <img> src di HTML
-    html = html
-      .replace(/<img[^>]+id="logoImage"[^>]*>/i,
-              `<img id="logoImage" src="${logoUrl}" alt="Logo" style="width: 32px; height: 32px; border-radius: 4px; background-color: rgba(255,255,255,0.2); object-fit: contain;" />`)
-      .replace(/<img[^>]+id="lunasStamp"[^>]*>/i,
-              `<img id="lunasStamp" src="${lunasUrl}" alt="LUNAS" style="margin-top: 10px; max-width: 120px; transform: rotate(-10deg); opacity: 0.7;" />`)
-      .replace(/<img[^>]+id="signatureImage"[^>]*>/i,
-              `<img id="signatureImage" src="${signatureUrl}" alt="Tanda Tangan" style="height: 60px; margin-bottom: 10px;" />`);
-
-    // fs.writeFileSync('./final-receipt-debug.html', html);
-    
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: 'andirentalmobilbi@gmail.com',
-        pass: 'nxvt jqzi bmvq ytzb',
-      },
-    });
-
-    await transporter.sendMail({
-      from: '"Andi Rental Mobil" <noreply@andirentalmobil.com>',
-      to,
-      subject: `Receipt Pembayaran - ${bookingCode}`,
-      html
-    });
-
-    res.status(200).json({ message: 'Receipt berhasil dikirim' });
+    return res.status(200).json({ message: cfg.sent, dry_run: delivery.dryRun });
   } catch (err) {
-    console.error('❌ Kirim receipt gagal:', err);
-    res.status(500).json({ message: 'Gagal mengirim receipt' });
+    console.error(`ERROR kirim ${kind}:`, err);
+    return res.status(500).json({ message: 'Email gagal dikirim.' });
   }
-});
+}
 
-//app post api/employees
-app.post('/api/employees', async (req, res) => {
-  const { username, full_name, level, password, user_id } = req.body;
-  if (!user_id) return res.status(400).json({ message: 'User ID tidak ditemukan.' });
+app.post('/api/send-confirmation-email', (req, res) => sendTransactionEmail('invoice', req, res));
+app.post('/api/send-receipt-email', (req, res) => sendTransactionEmail('receipt', req, res));
 
-  const validLevels = ['admin', 'manajemen'];
-  const normalizedLevel = level?.toLowerCase();
-  if (!validLevels.includes(normalizedLevel)) {
-    return res.status(400).json({ message: 'Level tidak valid' });
-  }
+// Never select dim_user.password into anything that reaches history_log or a response.
+const EMPLOYEE_LOG_COLUMNS = 'id, username, full_name, level, created_at';
 
+// POST /api/employees
+app.post('/api/employees', requireRole(...MANAGERS), async (req, res) => {
   try {
+    const who = actor(req);
+    const { username, full_name, level, password } = req.body || {};
+
+    if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
+      return res.status(400).json({ message: 'Username dan password wajib diisi.' });
+    }
+    if (full_name !== undefined && full_name !== null && typeof full_name !== 'string') {
+      return res.status(400).json({ message: 'Nama lengkap tidak valid.' });
+    }
+
+    const normalizedLevel = typeof level === 'string' ? level.toLowerCase() : undefined;
+    if (!ASSIGNABLE_LEVELS.includes(normalizedLevel)) {
+      return res.status(400).json({ message: 'Level tidak valid' });
+    }
+
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     const result = await pool.query(
-      'INSERT INTO dim_user (username, full_name, level, password) VALUES ($1, $2, $3, $4) RETURNING *',
+      'INSERT INTO dim_user (username, full_name, level, password) VALUES ($1, $2, $3, $4) RETURNING id, username, full_name, level',
       [username, full_name, normalizedLevel, hashedPassword]
     );
 
     const insertedUser = result.rows[0];
 
-    // Simpan log ke history_log_v1
-await pool.query(`
-  INSERT INTO history_log_v1 (
-    log_id, entity, action, changes, user_id, page
-  ) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
-`, [
-  insertedUser.id, // ✅ ID dari user yang baru ditambahkan
-  'employee',
-  'CREATE',
-  JSON.stringify({
-    after: {
-      username: insertedUser.username,
-      full_name: insertedUser.full_name,
-      level: insertedUser.level
-    },
-    before: null
-  }),
-  req.body.user_id, // pastikan ini UUID valid
-  'Manajemen Karyawan'
-]);
+    await pool.query(`
+      INSERT INTO history_log (
+        log_id, entity, action, changes, user_id, page
+      ) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+    `, [
+      insertedUser.id,
+      'employee',
+      'CREATE',
+      JSON.stringify({
+        after: {
+          username: insertedUser.username,
+          full_name: insertedUser.full_name,
+          level: insertedUser.level
+        },
+        before: null
+      }),
+      who.id,
+      'Manajemen Karyawan'
+    ]);
 
     res.status(201).json({ message: 'Data karyawan berhasil ditambahkan!' });
   } catch (error) {
     console.error('Error adding employee:', error);
-    
+
     if (error.code === '23505') {
-    return res.status(409).json({ message: 'Username sudah digunakan. Gunakan username lain.' });
-  }
+      return res.status(409).json({ message: 'Username sudah digunakan. Gunakan username lain.' });
+    }
     res.status(500).json({ message: 'Gagal menambahkan data karyawan.' });
   }
 });
 
-
-//app get api/employees
+// GET /api/employees
 app.get('/api/employees', async (req, res) => {
   try {
     const result = await pool.query('SELECT id, username, full_name, level, created_at FROM dim_user ORDER BY created_at DESC');
@@ -1195,18 +1045,38 @@ app.get('/api/employees', async (req, res) => {
   }
 });
 
-// app put /api/employees/:id
-app.put('/api/employees/:id', async (req, res) => {
+// PUT /api/employees/:id
+app.put('/api/employees/:id', requireRole(...MANAGERS), async (req, res) => {
+  const who = actor(req);
   const { id } = req.params;
-  const { full_name, level, password, user_id, username } = req.body;
+  const { full_name, level, password } = req.body || {};
+
+  const levelGiven = level !== undefined && level !== null && level !== '';
+  if (levelGiven && typeof level !== 'string') {
+    return res.status(400).json({ message: 'Level tidak valid' });
+  }
+  // bcrypt.hash throws on a non-string and pg would store an array as '{...}' text.
+  if ((full_name && typeof full_name !== 'string') || (password && typeof password !== 'string')) {
+    return res.status(400).json({ message: 'Data karyawan tidak valid.' });
+  }
 
   try {
-    const beforeResult = await pool.query('SELECT * FROM dim_user WHERE id = $1', [id]);
+    const beforeResult = await pool.query(`select ${EMPLOYEE_LOG_COLUMNS} from dim_user where id = $1`, [id]);
     const before = beforeResult.rows[0];
 
     if (!before) {
       return res.status(404).json({ message: 'Karyawan tidak ditemukan.' });
     }
+
+    // The edit form always resends the current level, so an unchanged one (even superadmin) is not a level change.
+    const requested = levelGiven ? level.toLowerCase() : undefined;
+    const normalizedLevel = requested !== undefined && requested !== before.level ? requested : undefined;
+    if (normalizedLevel !== undefined && !ASSIGNABLE_LEVELS.includes(normalizedLevel)) {
+      return res.status(400).json({ message: 'Level tidak valid' });
+    }
+
+    const denied = employeeChangeDenied(who, before, { level: normalizedLevel });
+    if (denied) return res.status(403).json({ message: denied });
 
     const fields = [];
     const values = [];
@@ -1217,9 +1087,9 @@ app.put('/api/employees/:id', async (req, res) => {
       values.push(full_name);
     }
 
-    if (level) {
+    if (normalizedLevel) {
       fields.push(`level = $${index++}`);
-      values.push(level);
+      values.push(normalizedLevel);
     }
 
     if (password) {
@@ -1233,7 +1103,7 @@ app.put('/api/employees/:id', async (req, res) => {
       return res.status(400).json({ message: 'Tidak ada field yang diupdate.' });
     }
 
-    values.push(id); // id untuk where condition
+    values.push(id);
 
     const updateQuery = `
       UPDATE dim_user
@@ -1242,18 +1112,22 @@ app.put('/api/employees/:id', async (req, res) => {
     `;
 
     await pool.query(updateQuery, values);
+    const afterResult = await pool.query(`select ${EMPLOYEE_LOG_COLUMNS} from dim_user where id = $1`, [id]);
 
-    // Catat ke log histori
     await pool.query(`
-      INSERT INTO history_log_v1 (
+      INSERT INTO history_log (
         log_id, entity, action, changes, user_id, page
       ) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
     `, [
       id,
       'employee',
       'UPDATE',
-      JSON.stringify({ before, after: { full_name, level, updated_by: username }, reason: password ? 'Reset password' : 'Edit data' }),
-      user_id,
+      JSON.stringify({
+        before,
+        after: { ...afterResult.rows[0], updated_by: who.username },
+        reason: password ? 'Reset password' : 'Edit data',
+      }),
+      who.id,
       'Manajemen Karyawan'
     ]);
 
@@ -1264,36 +1138,34 @@ app.put('/api/employees/:id', async (req, res) => {
   }
 });
 
-// app delete /api/employees/:id
-app.delete('/api/employees/:id', async (req, res) => {
+// DELETE /api/employees/:id
+app.delete('/api/employees/:id', requireRole(...MANAGERS), async (req, res) => {
+  const who = actor(req);
   const { id } = req.params;
-  const { user_id, username } = req.body;
-
-  if (!user_id) {
-    return res.status(400).json({ message: 'user_id tidak boleh kosong.' });
-  }
 
   try {
-    const result = await pool.query('SELECT * FROM dim_user WHERE id = $1', [id]);
+    const result = await pool.query(`select ${EMPLOYEE_LOG_COLUMNS} from dim_user where id = $1`, [id]);
     const before = result.rows[0];
 
     if (!before) {
       return res.status(404).json({ message: 'Karyawan tidak ditemukan.' });
     }
 
+    const denied = employeeChangeDenied(who, before, { isDelete: true });
+    if (denied) return res.status(403).json({ message: denied });
+
     await pool.query('DELETE FROM dim_user WHERE id = $1', [id]);
 
-    // Simpan ke history_log_v1
     await pool.query(`
-      INSERT INTO history_log_v1 (
+      INSERT INTO history_log (
         log_id, entity, action, changes, user_id, page
       ) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
     `, [
       id,
       'employee',
       'DELETE',
-      JSON.stringify({ before, reason: `Dihapus oleh ${username || 'unknown'}` }),
-      user_id,
+      JSON.stringify({ before, reason: `Dihapus oleh ${who.username}` }),
+      who.id,
       'Manajemen Karyawan'
     ]);
 
@@ -1304,16 +1176,11 @@ app.delete('/api/employees/:id', async (req, res) => {
   }
 });
 
-
-app.listen(process.env.PORT, () => {
-  console.log(`API running at http://localhost:${process.env.PORT}`);
-});
-
-// GET Activity Log
-app.get('/history-logs', async (req, res) => {
+// GET /api/history-logs
+app.get('/api/history-logs', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT 
+      SELECT
         h.id,
         h.log_id,
         h.entity,
@@ -1322,254 +1189,70 @@ app.get('/history-logs', async (req, res) => {
         h.page,
         h.created_at,
         h.user_id,
-        u.username -- ambil username dari join
-      FROM history_log_v1 h
-      LEFT JOIN dim_user u ON h.user_id = u.id
+        u.username
+      FROM history_log h
+      LEFT JOIN dim_user u ON h.user_id = u.id::text
       ORDER BY h.created_at DESC
     `);
-    res.json(result.rows);
+    res.json(result.rows.map((row) => ({ ...row, changes: redactLogChanges(row.changes) })));
   } catch (error) {
     console.error('Error fetching logs:', error);
     res.status(500).json({ message: 'Gagal mengambil log aktifitas.' });
   }
 });
 
-
 app.get('/api/transaction', async (req, res) => {
   try {
     const result = await pool.query(`SELECT * FROM fact_transaction WHERE deleted = false OR deleted IS NULL ORDER BY updated_at DESC`);
-
-    const baseUrl = process.env.BASE_URL || 'http://localhost:5000';
 
     const transactions = result.rows.map(row => ({
       ...row,
       deposit_payment_url: row.deposit_payment?.filename || null,
       down_payment_url: row.down_payment?.filename || null,
       full_payment_url: row.full_payment?.filename || null,
-      }));
+    }));
 
     res.json(transactions);
   } catch (err) {
-    console.error('❌ Error GET /api/transaction:', err);
+    console.error('Error GET /api/transaction:', err);
     res.status(500).json({ message: 'Gagal ambil data transaksi' });
   }
 });
 
-app.post('/api/transaction', upload.fields([
-  { name: 'ktpFile', maxCount: 1 },
-  { name: 'simFile', maxCount: 1 },
-  { name: 'kkFile', maxCount: 1 },
-  { name: 'workOrStudentIdFile', maxCount: 1 },
-  { name: 'parentKtpFile', maxCount: 1 },
-  { name: 'spouseKtpFile', maxCount: 1 },
-  { name: 'personalIdFile', maxCount: 1 },
-  { name: 'marriageDocFile', maxCount: 1 },
-  { name: 'picKtpFile', maxCount: 1 },
-  { name: 'picKkFile', maxCount: 1 },
-  { name: 'companyNpwpFile', maxCount: 1 },
-  { name: 'companySiupFile', maxCount: 1 },
-  { name: 'companyNibFile', maxCount: 1 },
-  { name: 'companyPhotoFile', maxCount: 1 },
-  { name: 'passportFile', maxCount: 1 },
-  { name: 'kitasKitapFile', maxCount: 1 },
-  { name: 'visaFile', maxCount: 1 },
-  { name: 'ticketFile', maxCount: 1 },
-  { name: 'ticketHotelFile', maxCount: 1 },
-  { name: 'housePhotoFile', maxCount: 1 },
-  { name: 'workIdFile', maxCount: 1 },
-  { name: 'verificationVideoFile', maxCount: 1 },
-  { name: 'optionalRequirementFile', maxCount: 1 },
-]), async (req, res) => {
-  const {
-    booking_code,
-    email,
-    rental_duration,
-    range_rent,
-    car_type,
-    deposit,
-    discount,
-    needs_trip,
-    needs_driver,
-    needs_delivery,
-    needs_pickup,
-    trip_fee,
-    driver_fee,
-    delivery_fee,
-    pickup_fee,
-    start_date,
-    start_time,
-    end_date,
-    grand_total,
-    identity_type,
-    name,
-    whatsapp,
-    address,
-    company_address,
-    purpose
-  } = req.body;
+// PUT /api/transaction/upload-payment/:id
+app.put('/api/transaction/upload-payment/:id', uploads.uploadPayment, async (req, res) => {
+  const who = actor(req);
+  const { id } = req.params;
+  const { isLunas } = req.body;
 
+  const depositFile = req.files?.deposit?.[0];
+  const dpFile = req.files?.dp?.[0];
+  const fullFile = req.files?.full?.[0];
+  const lunas = isLunas === 'true';
 
-  const username = req.body.username || 'system';
-  const parsedRangeRent = isNaN(Number(range_rent)) ? 0 : Number(range_rent);
-  const parsedGrandTotal = isNaN(Number(grand_total)) ? 0 : Number(grand_total);
-  const parsedStartTime = start_time && start_time.trim() !== '' ? start_time : null;
-  const parsedDeposit = isNaN(Number(deposit)) ? 0 : Number(deposit);
-  const parsedDiscount = isNaN(Number(discount)) ? 0 : Number(discount);
-  const parsedTripFee = isNaN(Number(trip_fee)) ? 0 : Number(trip_fee);
-  const parsedDriverFee = isNaN(Number(driver_fee)) ? 0 : Number(driver_fee);
-  const parsedDeliveryFee = isNaN(Number(delivery_fee)) ? 0 : Number(delivery_fee);
-  const parsedPickupFee = isNaN(Number(pickup_fee)) ? 0 : Number(pickup_fee);  
-  const parsedNeedsTrip     = req.body.needs_trip === 'true' || req.body.needs_trip === true;
-  const parsedNeedsDriver   = req.body.needs_driver === 'true' || req.body.needs_driver === true;
-  const parsedNeedsDelivery = req.body.needs_delivery === 'true' || req.body.needs_delivery === true;
-  const parsedNeedsPickup   = req.body.needs_pickup === 'true' || req.body.needs_pickup === true;
-
-
-  console.log('🧪 Parsed Boolean:', {
-  parsedNeedsTrip,
-  parsedNeedsDriver,
-  parsedNeedsDelivery,
-  parsedNeedsPickup
-});
-
+  let saved = false;
   try {
-    const result = await pool.query(`
-        INSERT INTO fact_transaction (
-          booking_code, email, rental_duration, range_rent, car_type, needs_trip, needs_driver,
-          needs_delivery, needs_pickup, start_date, start_time, end_date, grand_total,
-          deposit, discount, trip_fee, driver_fee, delivery_fee, pickup_fee, purpose,
-          identity_type, name, whatsapp, address, company_address,
-          created_at, created_by
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7,
-          $8, $9, $10, $11, $12, $13,
-          $14, $15, $16, $17, $18, $19, $20,
-          $21, $22, $23, $24, $25,
-          $26, $27
-        ) RETURNING *;
-      `, [
-        booking_code,
-        email,
-        rental_duration,
-        parsedRangeRent,
-        car_type,
-        parsedNeedsTrip,
-        parsedNeedsDriver,
-        parsedNeedsDelivery,
-        parsedNeedsPickup,
-        start_date,
-        parsedStartTime,
-        end_date,
-        parsedGrandTotal,
-        parsedDeposit,
-        parsedDiscount,
-        parsedTripFee,
-        parsedDriverFee,
-        parsedDeliveryFee,
-        parsedPickupFee,
-        purpose,
-        identity_type,
-        name,
-        whatsapp,
-        address,
-        company_address,
-        new Date(),
-        username || 'system'
-      ]);
-
-      console.log('📤 Inserted transaction:', result.rows[0]);
-
-      const insertedTransaction = result.rows[0];
-
-      const user_id = req.body.user_id || req.headers['x-user-id'];
-
-      if (!user_id) {
-        return res.status(400).json({ error: 'User ID wajib diisi.' });
-      }
-
-await pool.query(`
-      INSERT INTO history_log_v1 (
-        log_id, entity, action, changes, user_id, page
-      ) VALUES ($1, $2, $3, $4::jsonb, $5::uuid, $6)
-    `, [
-      insertedTransaction.id,
-      'transaction',
-      'CREATE',
-      JSON.stringify({ after: insertedTransaction, before: null, created_by: username }),
-      user_id,
-      'Form Booking'
-    ]);
-
-    res.status(201).json(insertedTransaction);
-  } catch (err) {
-    console.error('ERROR POST /api/transaction:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-
-// PUT Transaction
-app.put('/api/transaction/upload-payment/:id', upload.fields([
-  { name: 'deposit', maxCount: 1 },
-  { name: 'dp', maxCount: 1 },
-  { name: 'full', maxCount: 1 }
-]), async (req, res) => {
-  console.log('>>> PUT /api/transaction/upload-payment/', req.params.id);
-  try {
-    const { id } = req.params;
-    const { user_id, username, isLunas } = req.body;
-
-    const depositFile = req.files?.deposit?.[0];
-    const dpFile = req.files?.dp?.[0];
-    const fullFile = req.files?.full?.[0];
-
-    const lunas = isLunas === 'true';
-
-    // Ambil data sebelum update
     const beforeResult = await pool.query(
-      `SELECT * FROM fact_transaction WHERE id = $1`,
+      `SELECT * FROM fact_transaction WHERE id = $1 AND deleted = false`,
       [id]
     );
     const before = beforeResult.rows[0];
 
     if (!before) {
-      return res.status(404).json({ message: 'Transaksi tidak ditemukan' });
+      await uploads.removeRequestFiles(req);
+      return res.status(404).json({ message: 'Transaksi tidak ditemukan.' });
     }
 
-    console.log('Previous file:', before?.deposit_payment?.filename);
-    console.log('Updating file:', depositFile?.filename);
-
-    // Hapus file lama kalau dihapus atau upload baru
-    if (req.body.deleteDeposit === 'true' || depositFile) {
-      deleteFileIfExists(before?.deposit_payment?.filename);
-    }
-    if (req.body.deleteDp === 'true' || dpFile) {
-      deleteFileIfExists(before?.down_payment?.filename);
-    }
-    if (req.body.deleteFull === 'true' || fullFile) {
-      deleteFileIfExists(before?.full_payment?.filename);
-    }
-
-    const depositData =
-      req.body.deleteDeposit === 'true' ? null :
-      depositFile ? {
-        filename: depositFile.filename,
-        mimetype: depositFile.mimetype,
-      } : before?.deposit_payment;
-
-    const dpData =
-      req.body.deleteDp === 'true' ? null :
-      dpFile ? {
-        filename: dpFile.filename,
-        mimetype: dpFile.mimetype,
-      } : before?.down_payment;
-
-    const fullData =
-      req.body.deleteFull === 'true' ? null :
-      fullFile ? {
-        filename: fullFile.filename,
-        mimetype: fullFile.mimetype,
-      } : before?.full_payment;
+    const slots = [
+      { file: depositFile, deleteFlag: req.body.deleteDeposit === 'true', old: before.deposit_payment },
+      { file: dpFile, deleteFlag: req.body.deleteDp === 'true', old: before.down_payment },
+      { file: fullFile, deleteFlag: req.body.deleteFull === 'true', old: before.full_payment },
+    ];
+    const [depositData, dpData, fullData] = slots.map(({ file, deleteFlag, old }) => {
+      if (deleteFlag) return null;
+      if (file) return { filename: file.filename, mimetype: file.mimetype };
+      return old;
+    });
 
     const result = await pool.query(`
       UPDATE fact_transaction
@@ -1579,56 +1262,67 @@ app.put('/api/transaction/upload-payment/:id', upload.fields([
           lunas = $4,
           updated_by = $5,
           updated_at = NOW()
-      WHERE id = $6
+      WHERE id = $6 AND deleted = false
       RETURNING *
     `, [
       depositData,
       dpData,
       fullData,
       lunas,
-      username,
+      who.username,
       id
     ]);
+    // Soft-deleted between the read and this update.
+    if (result.rowCount === 0) {
+      await uploads.removeRequestFiles(req);
+      return res.status(404).json({ message: 'Transaksi tidak ditemukan.' });
+    }
+    saved = true;
+
+    // Old proofs go only after the row points at the new ones.
+    const stale = slots
+      .filter(({ file, deleteFlag, old }) => (file || deleteFlag) && old?.filename)
+      .map(({ old }) => old.filename);
+    await Promise.all(stale.map(uploads.deleteFileIfExists));
 
     const after = result.rows[0];
 
     await pool.query(`
-      INSERT INTO history_log_v1 (
+      INSERT INTO history_log (
         log_id, entity, action, changes, user_id, page
       ) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
     `, [
       id,
       'transaction',
       'UPDATE',
-      JSON.stringify({ before, after, reason: `Upload pembayaran oleh ${username}` }),
-      user_id,
+      JSON.stringify({ before, after, reason: `Upload pembayaran oleh ${who.username}` }),
+      who.id,
       'Upload Pembayaran Manual'
     ]);
 
     res.json({ message: 'Upload bukti pembayaran berhasil' });
-
   } catch (err) {
-    console.error('❌ ERROR PUT /api/transaction/upload-payment/:id', err);
+    console.error('ERROR PUT /api/transaction/upload-payment/:id', err);
+    if (!saved) await uploads.removeRequestFiles(req);
     res.status(500).json({ message: 'Gagal upload bukti pembayaran.' });
   }
 });
 
-// GET trx history
+// GET /api/transaction/history/:id
 app.get('/api/transaction/history/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const limit = parseInt(req.query.limit) || 5;
-    const offset = parseInt(req.query.offset) || 0;
+    const { limit, offset } = parsePaging(req.query);
 
     const result = await pool.query(`
-      SELECT * FROM history_log_v1
+      SELECT * FROM history_log
       WHERE log_id = $1 AND entity = 'transaction'
       ORDER BY created_at DESC
       LIMIT $2 OFFSET $3
     `, [id, limit, offset]);
 
     const totalResult = await pool.query(`
-      SELECT COUNT(*) FROM history_log_v1
+      SELECT COUNT(*) FROM history_log
       WHERE log_id = $1 AND entity = 'transaction'
     `, [id]);
 
@@ -1649,8 +1343,9 @@ app.get('/api/transaction/history/:id', async (req, res) => {
 
 // PUT /api/transaction/delete/:id
 app.put('/api/transaction/delete/:id', async (req, res) => {
+  const who = actor(req);
   const { id } = req.params;
-  const { reason, user_id, username } = req.body;
+  const { reason } = req.body;
 
   try {
     const beforeResult = await pool.query(`SELECT * FROM fact_transaction WHERE id = $1`, [id]);
@@ -1664,29 +1359,29 @@ app.put('/api/transaction/delete/:id', async (req, res) => {
       UPDATE fact_transaction
       SET deleted = true, delete_reason = $1, updated_at = NOW(), updated_by = $2
       WHERE id = $3
-    `, [reason, username, id]);
+    `, [reason, who.username, id]);
 
     await pool.query(`
-      INSERT INTO history_log_v1 (
+      INSERT INTO history_log (
         log_id, entity, action, changes, user_id, page
       ) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
     `, [
       id,
       'transaction',
       'DELETE',
-      JSON.stringify({ reason, before, deleted_by: `Dihapus oleh ${username}` }),
-      user_id,
+      JSON.stringify({ reason, before, deleted_by: `Dihapus oleh ${who.username}` }),
+      who.id,
       'Data Transaksi'
     ]);
 
     res.json({ message: 'Transaksi berhasil dihapus.' });
   } catch (err) {
-    console.error('❌ Error DELETE /api/transaction/delete/:id', err);
+    console.error('Error DELETE /api/transaction/delete/:id', err);
     res.status(500).json({ message: 'Gagal menghapus transaksi.' });
   }
 });
 
-// CHeck Booking Code Exists
+// GET /api/transaction/check-booking-code/:code
 app.get('/api/transaction/check-booking-code/:code', async (req, res) => {
   try {
     const { code } = req.params;
@@ -1702,128 +1397,69 @@ app.get('/api/transaction/check-booking-code/:code', async (req, res) => {
   }
 });
 
-
-// POST From Reorder 
+// POST /api/fact_transaction (reorder): new transaction for an existing customer, no dim_cust write.
 app.post('/api/fact_transaction', async (req, res) => {
+  const who = actor(req);
+  const body = req.body || {};
+  const parsed = parseBookingBody(body);
+  const data = parsed.data;
+  const invalid = parsed.invalid.filter((key) => !CUSTOMER_FIELDS.includes(key));
+  const customerId = bodyText(body.customer_id);
+  if (!UUID_RE.test(customerId)) invalid.push('customer_id');
+  if (invalid.length > 0) {
+    return res.status(400).json({ message: 'Data reorder belum lengkap atau tidak valid.', fields: invalid });
+  }
+
+  let client;
   try {
-    const {
-      booking_code,
-      email,
-      rental_duration,
-      range_rent,
-      car_type,
-      needs_trip,
-      needs_driver,
-      needs_delivery,
-      needs_pickup,
-      start_date,
-      start_time,
-      end_date,
-      grand_total,
-      deposit,
-      discount,
-      trip_fee,
-      driver_fee,
-      delivery_fee,
-      pickup_fee,
-      purpose,
-      identity_type,
-      name,
-      whatsapp,
-      address,
-      company_address,
-      user_id,
-      username
-    } = req.body;
+    client = await pool.connect();
+    await client.query('begin');
 
-    const parsedRangeRent = isNaN(Number(range_rent)) ? 0 : Number(range_rent);
-    const parsedGrandTotal = isNaN(Number(grand_total)) ? 0 : Number(grand_total);
-    const parsedStartTime = start_time && start_time.trim() !== '' ? start_time : null;
-    const parsedDeposit = isNaN(Number(deposit)) ? 0 : Number(deposit);
-    const parsedDiscount = isNaN(Number(discount)) ? 0 : Number(discount);
-    const parsedTripFee = isNaN(Number(trip_fee)) ? 0 : Number(trip_fee);
-    const parsedDriverFee = isNaN(Number(driver_fee)) ? 0 : Number(driver_fee);
-    const parsedDeliveryFee = isNaN(Number(delivery_fee)) ? 0 : Number(delivery_fee);
-    const parsedPickupFee = isNaN(Number(pickup_fee)) ? 0 : Number(pickup_fee);
+    // FOR SHARE holds off a concurrent soft delete of this customer until the reorder commits.
+    const customer = await client.query(
+      `select id, email, name, whatsapp, address, identity_type, company_address
+         from dim_cust where id = $1 and deleted = false for share`,
+      [customerId]
+    );
+    if (customer.rowCount === 0) {
+      await rollbackQuietly(client);
+      return res.status(404).json({ message: 'Customer tidak ditemukan.' });
+    }
+    for (const key of CUSTOMER_FIELDS) data[key] = customer.rows[0][key];
 
-    // ✅ Simpan ke fact_transaction
-    const result = await pool.query(`
-      INSERT INTO fact_transaction (
-        booking_code, email, rental_duration, range_rent, car_type, needs_trip, needs_driver,
-        needs_delivery, needs_pickup, start_date, start_time, end_date, grand_total,
-        deposit, discount, trip_fee, driver_fee, delivery_fee, pickup_fee, purpose,
-        identity_type, name, whatsapp, address, company_address,
-        created_at, created_by
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10, $11,
-        $12, $13, $14, $15, $16, $17,
-        $18, $19, $20, $21, $22,
-        $23, $24, $25, $26, $27
-      ) RETURNING *
+    const transaction = await withBookingCode(client, (code) => {
+      data.booking_code = code;
+      return insertTransaction(client, data, customerId, who);
+    });
+
+    await client.query(`
+      insert into history_log (log_id, entity, action, changes, user_id, page)
+      values ($1, 'transaction', 'CREATE', $2::jsonb, $3, 'Reorder Customer')
     `, [
-      booking_code,
-      email,
-      rental_duration,
-      parsedRangeRent,
-      car_type,
-      needs_trip === 'true' || needs_trip === true,
-      needs_driver === 'true' || needs_driver === true,
-      needs_delivery === 'true' || needs_delivery === true,
-      needs_pickup === 'true' || needs_pickup === true,
-      start_date,
-      parsedStartTime,
-      end_date,
-      parsedGrandTotal,
-      parsedDeposit,
-      parsedDiscount,
-      parsedTripFee,
-      parsedDriverFee,
-      parsedDeliveryFee,
-      parsedPickupFee,
-      purpose,
-      identity_type,
-      name,
-      whatsapp,
-      address,
-      company_address,
-      new Date(),
-      username || 'system'
+      transaction.id,
+      JSON.stringify({ after: transaction, created_by: who.username }),
+      who.id,
     ]);
 
-    const insertedTransaction = result.rows[0];
-
-    // ✅ Simpan ke history_log_v1
-    await pool.query(`
-      INSERT INTO history_log_v1 (
-        log_id, entity, action, changes, user_id, page
-      ) VALUES ($1, $2, $3, $4::jsonb, $5::uuid, $6)
-    `, [
-      insertedTransaction.id,
-      'transaction',
-      'CREATE',
-      JSON.stringify({ after: insertedTransaction, created_by: username }),
-      user_id,
-      'Reorder Customer'
-    ]);
-
-    res.status(201).json(insertedTransaction);
+    await client.query('commit');
+    return res.status(201).json(transaction);
   } catch (err) {
-    console.error('❌ ERROR POST /api/fact_transaction:', err);
-    res.status(500).json({ message: 'Gagal simpan data reorder.', error: err.message });
+    if (client) await rollbackQuietly(client);
+    return sendBookingError(err, res, 'reorder');
+  } finally {
+    if (client) client.release();
   }
 });
-
 
 // GET /api/loyalty-customers
 app.get('/api/loyalty-customers', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT 
-        ft.email, 
-        dc.name, 
-        dc.whatsapp, 
-        dc.address, 
+      SELECT
+        ft.email,
+        dc.name,
+        dc.whatsapp,
+        dc.address,
         COUNT(*) AS transaction_count
       FROM fact_transaction ft
       INNER JOIN dim_cust dc ON ft.email = dc.email
@@ -1837,12 +1473,11 @@ app.get('/api/loyalty-customers', async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error('Gagal ambil loyalty customer:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
+    res.status(500).json({ message: 'Gagal mengambil data loyalty customer.' });
   }
 });
 
-
-// GET semua rekening
+// GET /api/bank-accounts
 app.get('/api/bank-accounts', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM dim_bank ORDER BY created_at DESC');
@@ -1853,9 +1488,10 @@ app.get('/api/bank-accounts', async (req, res) => {
   }
 });
 
-// POST tambah rekening baru
-app.post('/api/bank-accounts', async (req, res) => {
-  const { bankName, logoUrl, accountNumber, accountHolderName, created_by, updated_by, user_id } = req.body;
+// POST /api/bank-accounts
+app.post('/api/bank-accounts', requireRole(...MANAGERS), async (req, res) => {
+  const who = actor(req);
+  const { bankName, logoUrl, accountNumber, accountHolderName } = req.body;
 
   try {
     const insertResult = await pool.query(
@@ -1864,13 +1500,13 @@ app.post('/api/bank-accounts', async (req, res) => {
       ) VALUES (
         gen_random_uuid(), $1, $2, $3, $4, CURRENT_TIMESTAMP, $5, CURRENT_TIMESTAMP, $6
       ) RETURNING *`,
-      [bankName, logoUrl, accountNumber, accountHolderName, created_by, updated_by]
+      [bankName, logoUrl, accountNumber, accountHolderName, who.username, who.username]
     );
 
     const inserted = insertResult.rows[0];
 
     await pool.query(
-      `INSERT INTO history_log_v1 (
+      `INSERT INTO history_log (
         log_id, entity, action, page, changes, user_id, created_at
       ) VALUES (
         gen_random_uuid(), $1, $2, $3, $4::jsonb, $5::uuid, CURRENT_TIMESTAMP
@@ -1880,7 +1516,7 @@ app.post('/api/bank-accounts', async (req, res) => {
         'CREATE',
         'Bank Account Settings',
         JSON.stringify({ after: inserted }),
-        user_id
+        who.id
       ]
     );
 
@@ -1891,24 +1527,27 @@ app.post('/api/bank-accounts', async (req, res) => {
   }
 });
 
-// PUT update rekening
-app.put('/api/bank-accounts/:id', async (req, res) => {
+// PUT /api/bank-accounts/:id
+app.put('/api/bank-accounts/:id', requireRole(...MANAGERS), async (req, res) => {
+  const who = actor(req);
   const { id } = req.params;
   const {
     bankName,
     logoUrl,
     accountNumber,
-    accountHolderName,
-    updated_by,
-    user_id // UUID untuk log
+    accountHolderName
   } = req.body;
 
   try {
     const { rows: beforeRows } = await pool.query('SELECT * FROM dim_bank WHERE id = $1', [id]);
     const before = beforeRows[0];
 
+    if (!before) {
+      return res.status(404).json({ message: 'Rekening tidak ditemukan.' });
+    }
+
     await pool.query(
-      `UPDATE dim_bank SET 
+      `UPDATE dim_bank SET
         bank_name = $1,
         logo_url = $2,
         account_number = $3,
@@ -1916,11 +1555,11 @@ app.put('/api/bank-accounts/:id', async (req, res) => {
         updated_at = CURRENT_TIMESTAMP,
         updated_by = $5
       WHERE id = $6`,
-      [bankName, logoUrl, accountNumber, accountHolderName, updated_by, id]
+      [bankName, logoUrl, accountNumber, accountHolderName, who.username, id]
     );
 
     await pool.query(
-      `INSERT INTO history_log_v1 (
+      `INSERT INTO history_log (
         log_id, entity, action, page, changes, user_id, created_at
       ) VALUES (
         gen_random_uuid(), $1, $2, $3, $4::jsonb, $5::uuid, CURRENT_TIMESTAMP
@@ -1929,8 +1568,8 @@ app.put('/api/bank-accounts/:id', async (req, res) => {
         'bank_account',
         'UPDATE',
         'Bank Account Settings',
-        JSON.stringify({ before, after: { bankName, logoUrl, accountNumber, accountHolderName, updated_by } }),
-        user_id
+        JSON.stringify({ before, after: { bankName, logoUrl, accountNumber, accountHolderName, updated_by: who.username } }),
+        who.id
       ]
     );
 
@@ -1941,10 +1580,10 @@ app.put('/api/bank-accounts/:id', async (req, res) => {
   }
 });
 
-// DELETE rekening
-app.post('/api/bank-accounts/delete/:id', async (req, res) => {
+// POST /api/bank-accounts/delete/:id
+app.post('/api/bank-accounts/delete/:id', requireRole(...MANAGERS), async (req, res) => {
+  const who = actor(req);
   const { id } = req.params;
-  const { user_id } = req.body;
 
   try {
     const { rows: beforeRows } = await pool.query('SELECT * FROM dim_bank WHERE id = $1', [id]);
@@ -1958,7 +1597,7 @@ app.post('/api/bank-accounts/delete/:id', async (req, res) => {
     await pool.query('DELETE FROM dim_bank WHERE id = $1', [id]);
 
     await pool.query(`
-      INSERT INTO history_log_v1 (
+      INSERT INTO history_log (
         log_id, entity, action, page, changes, user_id, created_at
       ) VALUES (
         gen_random_uuid(), $1, $2, $3, $4::jsonb, $5::uuid, CURRENT_TIMESTAMP
@@ -1968,7 +1607,7 @@ app.post('/api/bank-accounts/delete/:id', async (req, res) => {
       'DELETE',
       'Bank Account Settings',
       JSON.stringify({ before }),
-      user_id
+      who.id
     ]);
 
     res.json({ message: 'Rekening berhasil dihapus.' });
@@ -1978,37 +1617,37 @@ app.post('/api/bank-accounts/delete/:id', async (req, res) => {
   }
 });
 
-// GET Loyalty Poin
+// GET /api/loyalty-settings
 app.get('/api/loyalty-settings', async (req, res) => {
-  const { rows } = await pool.query('SELECT * FROM dim_loyalty_poin ORDER BY created_at DESC LIMIT 1');
+  try {
+    const { rows } = await pool.query('SELECT * FROM dim_loyalty_poin ORDER BY created_at DESC LIMIT 1');
 
-  if (rows.length > 0) {
-    res.json(rows[0]);
-  } else {
-    res.json({
-      daily_point: 1,
-      monthly_point: 25,
-      point_value: 2000,
-      min_exchange_point: 25
-    });
+    if (rows.length > 0) {
+      res.json(rows[0]);
+    } else {
+      res.json({
+        daily_point: 1,
+        monthly_point: 25,
+        point_value: 2000,
+        min_exchange_point: 25
+      });
+    }
+  } catch (err) {
+    console.error('Error GET /api/loyalty-settings:', err);
+    res.status(500).json({ message: 'Gagal mengambil pengaturan loyalty.' });
   }
 });
 
-
-  // POST Loyalty Poin
-app.post('/api/loyalty-settings', async (req, res) => {
+// POST /api/loyalty-settings
+app.post('/api/loyalty-settings', requireRole(...MANAGERS), async (req, res) => {
+  const who = actor(req);
   try {
     const {
       daily_point,
       monthly_point,
       point_value,
-      min_exchange_point,
-      created_by,
-      updated_by,
-      user_id
+      min_exchange_point
     } = req.body;
-
-    console.log('Data dari frontend:', req.body);
 
     const { rows: existing } = await pool.query(
       'SELECT * FROM dim_loyalty_poin ORDER BY created_at DESC LIMIT 1'
@@ -2030,34 +1669,32 @@ app.post('/api/loyalty-settings', async (req, res) => {
         monthly_point,
         point_value,
         min_exchange_point,
-        updated_by,         // ✅ fix di sini
+        who.username,
         existing[0].id
       ]);
 
       await pool.query(`
-        INSERT INTO history_log_v1 (
-    log_id, entity, action, page, changes, user_id, created_at
-  ) VALUES (
-    gen_random_uuid(), $1, $2, $3, $4::jsonb, $5::uuid, CURRENT_TIMESTAMP
-  )
-`, [
-  'loyalty_poin',
-  'UPDATE',
-  'Loyalty Settings',
-  JSON.stringify({
-    before: existing[0],
-    after: {
-      daily_point,
-      monthly_point,
-      point_value,
-      min_exchange_point,
-      updated_by  // hanya ditaruh di dalam JSON
-    }
-  }),
-  user_id // ini yang ke kolom UUID!
-]);
-
-
+        INSERT INTO history_log (
+          log_id, entity, action, page, changes, user_id, created_at
+        ) VALUES (
+          gen_random_uuid(), $1, $2, $3, $4::jsonb, $5::uuid, CURRENT_TIMESTAMP
+        )
+      `, [
+        'loyalty_poin',
+        'UPDATE',
+        'Loyalty Settings',
+        JSON.stringify({
+          before: existing[0],
+          after: {
+            daily_point,
+            monthly_point,
+            point_value,
+            min_exchange_point,
+            updated_by: who.username
+          }
+        }),
+        who.id
+      ]);
     } else {
       await pool.query(`
         INSERT INTO dim_loyalty_poin (
@@ -2072,190 +1709,174 @@ app.post('/api/loyalty-settings', async (req, res) => {
         monthly_point,
         point_value,
         min_exchange_point,
-        created_by,         // 
-        updated_by          // 
+        who.username,
+        who.username
       ]);
 
-await pool.query(`
-  INSERT INTO history_log_v1 (
-    log_id, entity, action, page, changes, user_id, created_at
-  ) VALUES (
-    gen_random_uuid(), $1, $2, $3, $4::jsonb, $5::uuid, CURRENT_TIMESTAMP
-  )
-`, [
-  'loyalty_poin',
-  'CREATE',
-  'Loyalty Settings',
-  JSON.stringify({
-    before: existing[0],
-    after: {
-      daily_point,
-      monthly_point,
-      point_value,
-      min_exchange_point,
-      created_by  // hanya ditaruh di dalam JSON
+      await pool.query(`
+        INSERT INTO history_log (
+          log_id, entity, action, page, changes, user_id, created_at
+        ) VALUES (
+          gen_random_uuid(), $1, $2, $3, $4::jsonb, $5::uuid, CURRENT_TIMESTAMP
+        )
+      `, [
+        'loyalty_poin',
+        'CREATE',
+        'Loyalty Settings',
+        JSON.stringify({
+          before: null,
+          after: {
+            daily_point,
+            monthly_point,
+            point_value,
+            min_exchange_point,
+            created_by: who.username
+          }
+        }),
+        who.id
+      ]);
     }
-  }),
-  user_id // ini yang ke kolom UUID!
-]);
-    }
-
 
     res.json({ message: 'Loyalty settings saved successfully.' });
   } catch (error) {
     console.error('POST /api/loyalty-settings ERROR:', error);
-    res.status(500).json({ message: 'Internal Server Error' });
+    res.status(500).json({ message: 'Gagal menyimpan pengaturan loyalty.' });
   }
 });
 
+const WEB_CONFIG_DESCRIPTIONS = WEB_CONFIG_FIELDS.map((f) => f.description);
 
-// GET all web config
-app.get('/api/web-configs', async (req, res) => {
-  const result = await pool.query('SELECT * FROM dim_web_config ORDER BY created_at DESC');
-  res.json(result.rows);
-});
+const WEB_CONFIG_COLUMNS = 'id, description, url_image, value_text, created_by, updated_by, created_at, updated_at';
 
-// POST new web config
-app.post('/api/web-configs', async (req, res) => {
-  const { description, url_image, created_by, updated_by, user_id } = req.body;
+async function loadWebConfig(db = pool) {
+  const { rows } = await db.query(
+    'select description, url_image, value_text from dim_web_config where lower(description) = any($1::text[])',
+    [WEB_CONFIG_DESCRIPTIONS.map((d) => d.toLowerCase())]
+  );
+  return rowsToConfig(rows);
+}
 
-  if (!user_id) {
-    return res.status(400).json({ error: 'user_id wajib diisi' });
-  }
-
-  // Helper untuk simpan history log
-  const saveHistoryLog = async ({ log_id, action, before = null, after = null }) => {
-    await pool.query(`
-      INSERT INTO history_log_v1 (
-        log_id, entity, action, changes, user_id, page
-      ) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
-    `, [
-      log_id,
-      'web_config',
-      action,
-      JSON.stringify({ before, after }),
-      user_id,
-      'Pengaturan Web'
-    ]);
-  };
-
+// GET /api/web-config: every fixed key, null when unset (the UI shows the default instead).
+app.get('/api/web-config', async (req, res) => {
   try {
-    // Cek apakah description sudah ada
-    const check = await pool.query(
-      `SELECT * FROM dim_web_config WHERE description = $1`,
-      [description]
-    );
+    res.json(await loadWebConfig());
+  } catch (err) {
+    console.error('Error GET /api/web-config:', err);
+    res.status(500).json({ message: 'Gagal mengambil pengaturan web.' });
+  }
+});
 
-    if (check.rowCount > 0) {
-      const existing = check.rows[0];
+// PUT /api/web-config: only the keys sent are touched. Empty or null removes the row,
+// which puts that key back on its default.
+app.put('/api/web-config', requireRole(...MANAGERS), async (req, res) => {
+  const who = actor(req);
+  const parsed = parseWebConfigInput(req.body);
+  if (parsed.error) return res.status(400).json({ message: parsed.error });
 
-      // Jika gambar sama → tidak perlu simpan ulang
-      if (existing.url_image === url_image) {
-        return res.status(409).json({
-          message: 'Deskripsi sudah ada dan gambar sama. Tidak perlu disimpan ulang.'
-        });
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query('begin');
+
+    let changed = 0;
+    for (const [key, value] of Object.entries(parsed.values)) {
+      const field = FIELD_BY_KEY.get(key);
+      const column = field.type === 'url' ? 'url_image' : 'value_text';
+      const { rows: existingRows } = await client.query(
+        `select ${WEB_CONFIG_COLUMNS} from dim_web_config where lower(description) = lower($1) for update`,
+        [field.description]
+      );
+      const existing = existingRows[0] || null;
+
+      let action = null;
+      let after = null;
+      if (value === null) {
+        if (!existing) continue;
+        await client.query('delete from dim_web_config where lower(description) = lower($1)', [field.description]);
+        action = 'DELETE';
+      } else if (existing) {
+        if (existing[column] === value) continue;
+        const { rows } = await client.query(
+          `update dim_web_config set ${column} = $1, updated_by = $2, updated_at = now() where id = $3 returning ${WEB_CONFIG_COLUMNS}`,
+          [value, who.username, existing.id]
+        );
+        after = rows[0];
+        action = 'UPDATE';
+      } else {
+        const { rows } = await client.query(
+          `insert into dim_web_config (description, ${column}, created_by, updated_by, created_at, updated_at)
+           values ($1, $2, $3, $3, now(), now()) returning ${WEB_CONFIG_COLUMNS}`,
+          [field.description, value, who.username]
+        );
+        after = rows[0];
+        action = 'CREATE';
       }
 
-      // Jika gambar beda → lakukan UPDATE
-      const updateResult = await pool.query(`
-        UPDATE dim_web_config
-        SET url_image = $1, updated_by = $2, updated_at = NOW()
-        WHERE id = $3
-        RETURNING *
-      `, [url_image, updated_by, existing.id]);
-
-      const after = updateResult.rows[0];
-
-      // Simpan log UPDATE
-      await saveHistoryLog({
-        log_id: existing.id,
-        action: 'UPDATE',
-        before: existing,
-        after
-      });
-
-      return res.status(200).json(after);
+      await client.query(`
+        insert into history_log (log_id, entity, action, changes, user_id, page)
+        values ($1, 'web_config', $2, $3::jsonb, $4, 'Pengaturan Web')
+      `, [(after || existing).id, action, JSON.stringify({ before: existing, after }), who.id]);
+      changed += 1;
     }
 
-    // Jika belum ada → INSERT baru
-    const insertResult = await pool.query(`
-      INSERT INTO dim_web_config (
-        description, url_image, created_by, updated_by, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, NOW(), NOW())
-      RETURNING *
-    `, [description, url_image, created_by, updated_by]);
-
-    const inserted = insertResult.rows[0];
-
-    // Simpan log CREATE
-    await saveHistoryLog({
-      log_id: inserted.id,
-      action: 'CREATE',
-      after: inserted
-    });
-
-    res.status(201).json(inserted);
+    await client.query('commit');
+    return res.json({ changed, config: await loadWebConfig() });
   } catch (err) {
+    if (client) await rollbackQuietly(client);
+    // Two admins inserting the same key at once: dim_web_config_description_key rejects the second.
+    if (err.code === '23505') {
+      return res.status(409).json({ message: 'Pengaturan ini baru saja diubah admin lain. Muat ulang lalu coba lagi.' });
+    }
     console.error('Gagal simpan web config:', err);
-    res.status(500).json({ message: 'Gagal menyimpan pengaturan web.' });
+    return res.status(500).json({ message: 'Gagal menyimpan pengaturan web.' });
+  } finally {
+    if (client) client.release();
   }
 });
 
-
-
-app.delete('/api/web-configs/:id', async (req, res) => {
-  const { id } = req.params;
-  const { user_id } = req.query; // Ambil user_id dari query param (bisa juga dari token/session)
-
+// GET /api/web-config/public (no login: the login page and favicon need it). Logo and favicon only.
+app.get('/api/web-config/public', async (req, res) => {
   try {
-    const result = await pool.query(
-      'DELETE FROM dim_web_config WHERE id = $1 RETURNING *',
-      [id]
-    );
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ message: 'Data tidak ditemukan' });
-    }
-
-    const deletedData = result.rows[0];
-
-    // Simpan ke history log
-    await pool.query(`
-      INSERT INTO history_log_v1 (
-        log_id, entity, action, changes, user_id, page
-      ) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
-    `, [
-      deletedData.id,
-      'web_config',
-      'DELETE',
-      JSON.stringify({ before: deletedData }), // Hanya "before"
-      user_id || 'system',
-      'Pengaturan Web'
-    ]);
-
-    res.status(200).json({ message: 'Berhasil dihapus' });
+    res.json(publicConfig(await loadWebConfig()));
   } catch (err) {
-    console.error('Gagal hapus web config:', err);
-    res.status(500).json({ message: 'Gagal menghapus web config' });
+    console.error('Gagal ambil web config publik:', err);
+    res.status(500).json({ message: 'Gagal mengambil pengaturan web.' });
   }
 });
 
-
+// GET /api/web-config/logo (public). Kept for login tabs opened before /public existed.
 app.get('/api/web-config/logo', async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT url_image FROM dim_web_config
-      WHERE LOWER(description) = 'logo'
-      LIMIT 1
-    `);
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ message: 'Logo tidak ditemukan' });
-    }
-
-    res.json(result.rows[0]); // hanya { url_image }
+    const { logo } = await loadWebConfig();
+    if (!logo) return res.status(404).json({ message: 'Logo tidak ditemukan' });
+    res.json({ url_image: logo });
   } catch (err) {
     console.error('Gagal ambil logo:', err);
     res.status(500).json({ message: 'Gagal mengambil logo' });
   }
+});
+
+app.use((req, res) => {
+  res.status(404).json({ message: 'Tidak ditemukan.' });
+});
+
+// Never send a stack or raw error text: malformed JSON and bad URI encoding land here.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const status = err.status || err.statusCode;
+  if (status >= 400 && status < 500) {
+    return res.status(status).json({ message: status === 413 ? 'Data terlalu besar.' : 'Permintaan tidak valid.' });
+  }
+  console.error('Unhandled error:', err);
+  return res.status(500).json({ message: 'Terjadi kesalahan di server.' });
+});
+
+// Express 4 does not catch a rejected async handler; log it instead of letting Node exit.
+// The request itself may hang until the client times out, so handlers still need their own try/catch.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+
+app.listen(process.env.PORT, () => {
+  console.log(`API running at http://localhost:${process.env.PORT}`);
 });
