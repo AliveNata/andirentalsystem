@@ -1,9 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Menu, X } from 'lucide-react';
 import { AuthState } from './types';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
-import { Toaster, toast } from 'react-hot-toast';
+import { toast } from 'react-hot-toast';
+import { FORBIDDEN_EVENT, SESSION_EXPIRED_EVENT, type ForbiddenDetail } from './lib/sessionGuard';
+import { GUARD_TOAST_ID } from './lib/notify';
+import { Modal, ModalButton } from './components/ui/Modal';
 
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
@@ -27,7 +30,27 @@ function App() {
     }
   }, [darkMode]);
 
-  // 🔐 Cek session saat app pertama kali load
+  const clearLocalSession = useCallback(() => {
+    localStorage.removeItem('user');
+    localStorage.removeItem('token');
+    setShowWarning(false);
+    setAuth({ isAuthenticated: false, username: '' });
+  }, []);
+
+  const logout = useCallback(async () => {
+    try {
+      await fetch(`${API_BASE_URL.replace(/\/$/, '')}/logout`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+    } catch (err) {
+      console.error('Error logging out:', err);
+    }
+    clearLocalSession();
+    // Other open tabs listen for this key and drop their session too.
+    localStorage.setItem('lastLogout', Date.now().toString());
+  }, [clearLocalSession]);
+
   useEffect(() => {
     fetch(`${API_BASE_URL.replace(/\/$/, '')}/me`, {
       credentials: 'include',
@@ -35,15 +58,15 @@ function App() {
       .then(async (res) => {
         if (res.ok) {
           const data = await res.json();
+          // Components read the level from localStorage, so keep it in step with the server session.
+          localStorage.setItem('user', JSON.stringify(data.user));
           setAuth({
             isAuthenticated: true,
             username: data.user.username,
           });
         } else if (res.status === 401) {
-          // 🔵 Kalau 401 (belum login), biasa aja
-          console.log('Belum login.');
+          localStorage.removeItem('user');
         } else {
-          // 🔴 Kalau error lain, baru log error
           const errText = await res.text();
           console.error(`Error: ${res.status} - ${errText}`);
         }
@@ -56,16 +79,36 @@ function App() {
       });
   }, []);
 
-  // ⏳ Auto logout saat idle 15 menit + warning 1 menit sebelumnya + sync antar tab + request ke server saat tab ditutup
   useEffect(() => {
-    let idleTimeout: NodeJS.Timeout;
-    let warningTimeout: NodeJS.Timeout;
+    const handleExpired = () => {
+      clearLocalSession();
+      // A fixed id collapses several failing requests into one toast.
+      toast.error('Sesi login sudah berakhir. Silakan login lagi.', { id: GUARD_TOAST_ID.expired });
+    };
+    const handleForbidden = (e: Event) => {
+      const { message } = (e as CustomEvent<ForbiddenDetail>).detail ?? {};
+      toast.error(message || 'Akses ditolak untuk level akun ini.', { id: GUARD_TOAST_ID.forbidden });
+    };
 
-    const logout = () => {
-      setAuth({ isAuthenticated: false, username: '' });
-      localStorage.removeItem('token');
-      localStorage.setItem('lastLogout', Date.now().toString());
-      window.location.href = '/';
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleExpired);
+    window.addEventListener(FORBIDDEN_EVENT, handleForbidden);
+    return () => {
+      window.removeEventListener(SESSION_EXPIRED_EVENT, handleExpired);
+      window.removeEventListener(FORBIDDEN_EVENT, handleForbidden);
+    };
+  }, [clearLocalSession]);
+
+  // Idle logout after 15 minutes with a warning at 14. Only runs while logged in.
+  useEffect(() => {
+    if (!auth.isAuthenticated) return;
+
+    let idleTimeout: ReturnType<typeof setTimeout>;
+    let warningTimeout: ReturnType<typeof setTimeout>;
+
+    const idleLogout = () => {
+      logout().then(() => {
+        toast('Kamu otomatis logout karena tidak aktif selama 15 menit.', { id: 'idle-logout' });
+      });
     };
 
     const resetTimer = () => {
@@ -80,27 +123,19 @@ function App() {
         setShowWarning(true);
       }, 14 * 60 * 1000);
 
-      idleTimeout = setTimeout(() => {
-        logout();
-      }, 15 * 60 * 1000);
+      idleTimeout = setTimeout(idleLogout, 15 * 60 * 1000);
     };
 
-    const handleBeforeUnload = () => {
-      localStorage.removeItem('token');
-      localStorage.setItem('lastLogout', Date.now().toString());
-      // Kirim request logout ke server
-      navigator.sendBeacon(`${API_BASE_URL.replace(/\/$/, '')}/logout`);
-    };
-
+    // The server session is already gone; clear locally without re-broadcasting,
+    // otherwise two tabs keep triggering each other.
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'lastLogout') {
-        logout();
+        clearLocalSession();
       }
     };
 
     const events = ['mousemove', 'keydown', 'click'];
     events.forEach((event) => window.addEventListener(event, resetTimer));
-    window.addEventListener('beforeunload', handleBeforeUnload);
     window.addEventListener('storage', handleStorageChange);
 
     resetTimer();
@@ -109,10 +144,9 @@ function App() {
       clearTimeout(idleTimeout);
       clearTimeout(warningTimeout);
       events.forEach((event) => window.removeEventListener(event, resetTimer));
-      window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('storage', handleStorageChange);
     };
-  }, []);
+  }, [auth.isAuthenticated, logout, clearLocalSession]);
 
   const handleLogin = (username: string, password: string) => {
     if (username && password) {
@@ -120,7 +154,7 @@ function App() {
         isAuthenticated: true,
         username,
       });
-      toast.success(`Hi ${username}, selamat datang kembali! 👋`); // ✅ Notifikasi personal
+      toast.success(`Halo, ${username}.`);
     }
   };
 
@@ -138,8 +172,6 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-100">
-      <Toaster position="top-right" reverseOrder={false} />
-
       {showWarning && (
         <div className="fixed top-4 right-4 bg-yellow-300 text-black px-4 py-2 rounded shadow-md z-50">
           Kamu akan logout dalam 1 menit karena tidak aktif
@@ -195,7 +227,7 @@ function App() {
   </button>
 </div>
           <button
-            onClick={() => setAuth({ isAuthenticated: false, username: '' })}
+            onClick={() => { void logout(); }}
             className="w-full bg-red-500 text-white text-sm px-3 py-1 rounded hover:bg-red-600"
           >
             Logout
@@ -208,25 +240,20 @@ function App() {
 
       <Dashboard isSidebarOpen={isSidebarOpen} />
 
-      {showChangelog && (
-  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-    <div className="bg-white dark:bg-gray-900 rounded-lg shadow-lg max-w-md w-full p-6 relative">
-      <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-4">Version Log v1.0.0</h2>
-      <ul className="text-sm text-gray-700 dark:text-gray-300 list-disc pl-5 space-y-2">
-        <li>✅ Deployed new released</li>
-        <li>🌙 Fitur dark mode toggle (Beta)</li>
-        <li>📊 Pembersihan Logo</li>
-        <li>🧾 Sistem invoice dan cap lunas</li>
-      </ul>
-      <button
-        onClick={() => setShowChangelog(false)}
-        className="absolute top-2 right-3 text-gray-500 hover:text-red-500 text-lg"
+      <Modal
+        open={showChangelog}
+        onClose={() => setShowChangelog(false)}
+        title="Version Log v1.0.0"
+        size="sm"
+        footer={<ModalButton onClick={() => setShowChangelog(false)}>Tutup</ModalButton>}
       >
-        ×
-      </button>
-    </div>
-  </div>
-)}
+        <ul className="list-disc space-y-2 pl-5 text-sm text-gray-700">
+          <li>Deployed new released</li>
+          <li>Fitur dark mode toggle (Beta)</li>
+          <li>Pembersihan Logo</li>
+          <li>Sistem invoice dan cap lunas</li>
+        </ul>
+      </Modal>
 
       <footer className="text-center text-sm py-4 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300">
         © {new Date().getFullYear()} Andi Rental Mobil System. All rights reserved.

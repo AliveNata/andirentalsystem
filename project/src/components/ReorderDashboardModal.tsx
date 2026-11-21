@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import PhoneInput from 'react-phone-input-2';
 import 'react-phone-input-2/lib/style.css';
+import { Modal, ModalButton } from './ui/Modal';
 
 interface Customer {
   id: string;
@@ -69,10 +70,18 @@ const ReorderDashboardModal: React.FC<ReorderDashboardModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-6 overflow-y-auto">
-      <div className="bg-white w-full max-w-2xl rounded-xl p-6 shadow-lg">
-        <h2 className="text-xl font-bold mb-4">Formulir Reorder</h2>
-
+    <Modal
+      open
+      onClose={onBack}
+      title="Formulir Reorder"
+      size="lg"
+      footer={
+        <>
+          <ModalButton onClick={onBack}>Kembali</ModalButton>
+          <ModalButton variant="primary" onClick={() => onSubmit(formData)}>Submit</ModalButton>
+        </>
+      }
+    >
         <form>
           <div className="grid grid-cols-1 gap-4">
             <div>
@@ -187,26 +196,8 @@ const ReorderDashboardModal: React.FC<ReorderDashboardModalProps> = ({
               </div>
             )}
           </div>
-
-          <div className="mt-6 flex justify-end gap-4">
-            <button
-              type="button"
-              onClick={onBack}
-              className="px-4 py-2 rounded bg-gray-200 text-gray-700 hover:bg-gray-300"
-            >
-              Kembali
-            </button>
-            <button
-              type="button"
-              onClick={() => onSubmit(formData)}
-              className="px-4 py-2 rounded bg-orange-500 text-white hover:bg-orange-600"
-            >
-              Submit
-            </button>
-          </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 };
 

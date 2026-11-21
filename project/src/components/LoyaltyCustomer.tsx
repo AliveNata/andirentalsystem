@@ -1,6 +1,9 @@
 // src/components/LoyaltyCustomer.tsx
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Search, Trophy } from 'lucide-react';
+import Pagination from './ui/Pagination';
+import { ScrollableTable, TABLE_HEAD_CLASS, TableMessageRow, Th } from './ui/DataTable';
+import { usePagination } from '../lib/usePagination';
 
 interface CustomerData {
   email: string;
@@ -12,11 +15,12 @@ interface CustomerData {
 
 const itemsPerPage = 10;
 
+const TROPHY_COLOR = ['text-yellow-500', 'text-gray-500', 'text-amber-700'];
+
 function LoyaltyCustomer() {
   const [data, setData] = useState<CustomerData[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
   const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
   useEffect(() => {
@@ -32,6 +36,12 @@ function LoyaltyCustomer() {
       });
   }, []);
 
+  // The server sends customers ordered by transaction count, so the trophy follows the overall rank,
+  // not the row number, and stays with the same customer while a search is active.
+  // Keyed by row object, not email: one email can appear on several rows (different name or WhatsApp),
+  // and an email key would hand the later row's rank to the top customer.
+  const rankByRow = useMemo(() => new Map(data.map((cust, i) => [cust, i + 1])), [data]);
+
   const filteredData = data.filter((cust) => {
     const term = searchTerm.toLowerCase();
     return (
@@ -41,10 +51,10 @@ function LoyaltyCustomer() {
     );
   });
 
-  const totalPages = Math.ceil(filteredData.length / itemsPerPage);
-  const paginatedData = filteredData.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
+  const { page, setPage, totalPages, pageItems: paginatedData, startIndex } = usePagination(
+    filteredData,
+    itemsPerPage,
+    searchTerm,
   );
 
   return (
@@ -69,72 +79,65 @@ function LoyaltyCustomer() {
         </div>
       ) : (
         <>
-          <div className="overflow-x-auto">
-            <table className="min-w-full bg-white rounded-lg overflow-hidden shadow-lg">
-              <thead className="bg-gray-50">
+          <ScrollableTable label="Tabel loyalty customer">
+            <table className="min-w-full bg-white">
+              <thead className={TABLE_HEAD_CLASS}>
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">#</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nama</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Whatsapp</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Alamat</th>
-                  <th className="px-6 py-3 text-left text-xs text-center font-medium text-gray-500 uppercase tracking-wider">Jumlah Transaksi</th>
+                  <Th>#</Th>
+                  <Th>Email</Th>
+                  <Th>Nama</Th>
+                  <Th>Whatsapp</Th>
+                  <Th>Alamat</Th>
+                  <Th align="right">Jumlah Transaksi</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {paginatedData.map((cust, idx) => (
-                  <tr key={cust.email} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {(() => {
-                        const rank = (currentPage - 1) * itemsPerPage + idx + 1;
-                        if (rank === 1) return <Trophy className="text-yellow-500" size={18} />;
-                        if (rank === 2) return <Trophy className="text-gray-400" size={18} />;
-                        if (rank === 3) return <Trophy className="text-amber-700" size={18} />;
-                        return rank;
-                      })()}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{cust.email}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{cust.name}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{cust.whatsapp}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{cust.address}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-center font-bold text-black-600">{cust.transaction_count}</td>
-                  </tr>
-                ))}
+                {paginatedData.length === 0 ? (
+                  <TableMessageRow colSpan={6}>
+                    {searchTerm.trim()
+                      ? `Tidak ada customer yang cocok dengan "${searchTerm.trim()}".`
+                      : 'Belum ada customer dengan transaksi.'}
+                  </TableMessageRow>
+                ) : (
+                  paginatedData.map((cust, idx) => {
+                    const rank = rankByRow.get(cust) ?? 0;
+                    return (
+                      <tr key={`${cust.email}|${cust.name}|${cust.whatsapp}|${cust.address}`} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 tabular-nums">
+                          <span className="inline-flex items-center gap-2">
+                            {startIndex + idx + 1}
+                            {rank >= 1 && rank <= 3 && (
+                              <Trophy
+                                className={TROPHY_COLOR[rank - 1]}
+                                size={18}
+                                role="img"
+                                aria-label={`Peringkat ${rank}`}
+                              />
+                            )}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{cust.email}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{cust.name}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{cust.whatsapp}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{cust.address}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right font-bold tabular-nums">{cust.transaction_count}</td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
-          </div>
+          </ScrollableTable>
 
-          {/* Pagination */}
-          <div className="flex justify-between items-center mt-4">
-            <p className="text-sm text-gray-600">
-              Menampilkan {paginatedData.length} dari {filteredData.length} data
-            </p>
-            <div className="flex space-x-2">
-              <button
-                onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
-                disabled={currentPage === 1}
-                className="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-50"
-              >
-                &laquo;
-              </button>
-              {[...Array(totalPages)].map((_, index) => (
-                <button
-                  key={index}
-                  onClick={() => setCurrentPage(index + 1)}
-                  className={`px-3 py-1 border rounded ${currentPage === index + 1 ? 'bg-orange-500 text-white' : 'hover:bg-gray-100'}`}
-                >
-                  {index + 1}
-                </button>
-              ))}
-              <button
-                onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
-                disabled={currentPage === totalPages}
-                className="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-50"
-              >
-                &raquo;
-              </button>
-            </div>
-          </div>
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            totalItems={filteredData.length}
+            pageCount={paginatedData.length}
+            startIndex={startIndex}
+            onPageChange={setPage}
+            itemLabel="customer"
+          />
         </>
       )}
     </div>

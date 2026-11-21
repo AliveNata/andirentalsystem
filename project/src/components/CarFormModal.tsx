@@ -1,7 +1,9 @@
 import React, { useRef, useState, useEffect } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
-import { Dialog } from '@headlessui/react';
+import { fileUrl } from '../lib/fileUrl';
+import { notifyError, notifySuccess } from '../lib/notify';
+import { Modal, ModalButton } from './ui/Modal';
 
 export interface CarData {
   name: string;
@@ -41,6 +43,7 @@ const CarFormModal: React.FC<CarFormModalProps> = ({ isOpen, onClose, onSuccess,
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [existingImagePreviews, setExistingImagePreviews] = useState<string[]>([]);
   const [errors, setErrors] = useState<{ [key: string]: boolean }>({});
+  const [isSaving, setIsSaving] = useState(false);
 
   const API_BASE_URL = import.meta.env.VITE_API_URL;
 
@@ -76,7 +79,7 @@ const CarFormModal: React.FC<CarFormModalProps> = ({ isOpen, onClose, onSuccess,
         }
       }
 
-      const imageUrls = images.map(img => `${API_BASE_URL.replace(/\/$/, '')}/uploads/${img}`);
+      const imageUrls = images.map(img => fileUrl(img)).filter((url): url is string => Boolean(url));
       setExistingImagePreviews(imageUrls);
     } else {
       setFormData(defaultFormData);
@@ -164,7 +167,7 @@ const CarFormModal: React.FC<CarFormModalProps> = ({ isOpen, onClose, onSuccess,
     const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
     const currentUserId = currentUser.id;
     if (!currentUserId) {
-      alert('User belum login. Tidak bisa menyimpan data.');
+      toast.error('Data login tidak ditemukan. Login ulang lalu simpan lagi.');
       return;
     }
 
@@ -185,25 +188,14 @@ const CarFormModal: React.FC<CarFormModalProps> = ({ isOpen, onClose, onSuccess,
     data.append('created_by', currentUser.username);
     data.append('user_id', currentUserId);
 
+    setIsSaving(true);
     try {
       if (initialData) {
-        await toast.promise(
-          axios.put(`${API_BASE_URL.replace(/\/$/, '')}/cars/${initialData.id}`, data),
-          {
-            loading: 'Memperbarui data...',
-            success: 'Data mobil berhasil diperbarui!',
-            error: 'Gagal memperbarui data.',
-          }
-        );
+        await axios.put(`${API_BASE_URL.replace(/\/$/, '')}/cars/${initialData.id}`, data);
+        notifySuccess('Mobil berhasil diperbarui.');
       } else {
-        await toast.promise(
-          axios.post(`${API_BASE_URL.replace(/\/$/, '')}/cars`, data),
-          {
-            loading: 'Menyimpan data...',
-            success: 'Data mobil berhasil ditambahkan!',
-            error: 'Gagal menyimpan data.',
-          }
-        );
+        await axios.post(`${API_BASE_URL.replace(/\/$/, '')}/cars`, data);
+        notifySuccess('Mobil berhasil ditambahkan.');
       }
 
       onSuccess();
@@ -215,19 +207,29 @@ const CarFormModal: React.FC<CarFormModalProps> = ({ isOpen, onClose, onSuccess,
       setExistingImagePreviews([]);
     } catch (err) {
       console.error(err);
+      notifyError(err, initialData ? 'Mobil gagal diperbarui' : 'Mobil gagal ditambahkan');
+    } finally {
+      setIsSaving(false);
     }
   };
 
   return (
-    <Dialog open={isOpen} onClose={onClose} className="fixed z-50 inset-0">
-      <div className="bg-black/40 fixed inset-0" aria-hidden="true" />
-      <div className="fixed inset-0 flex items-center justify-center p-4 overflow-y-auto">
-        <Dialog.Panel className="max-h-screen overflow-y-auto bg-white w-full max-w-xl rounded-xl shadow-lg p-6">
-          <Dialog.Title className="text-lg font-semibold mb-4">
-            {initialData ? 'Edit Data Mobil' : 'Tambah Data Mobil'}
-          </Dialog.Title>
-
-          <form onSubmit={handleSubmit} className="space-y-3">
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      title={initialData ? 'Edit Data Mobil' : 'Tambah Data Mobil'}
+      size="md"
+      busy={isSaving}
+      footer={
+        <>
+          <ModalButton onClick={onClose} disabled={isSaving}>Batal</ModalButton>
+          <ModalButton type="submit" form="car-form" variant="primary" busy={isSaving} busyLabel="Menyimpan...">
+            Simpan
+          </ModalButton>
+        </>
+      }
+    >
+          <form id="car-form" onSubmit={handleSubmit} className="space-y-3">
             {[{ label: 'Nama Mobil', name: 'name' },
               { label: 'Brand', name: 'brand' },
               { label: 'Tipe Mobil', name: 'type' },
@@ -345,26 +347,8 @@ const CarFormModal: React.FC<CarFormModalProps> = ({ isOpen, onClose, onSuccess,
                 />
               ))}
             </div>
-
-            <div className="flex justify-end gap-2 pt-4">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300"
-              >
-                Batal
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white rounded-xl hover:from-orange-600 hover:to-yellow-600"
-              >
-                Simpan
-              </button>
-            </div>
           </form>
-        </Dialog.Panel>
-      </div>
-    </Dialog>
+    </Modal>
   );
 };
 

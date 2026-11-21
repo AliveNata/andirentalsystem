@@ -1,9 +1,68 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { Search, Eye, FileDown, Clock, Edit2, Trash2, AlertCircle, Send, Loader, Receipt } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Search, Eye, FileDown, Clock, Edit2, Trash2, Send, Loader, Receipt, FileText } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
+import { fileUrl } from '../lib/fileUrl';
+import { responseMessage } from '../lib/sessionGuard';
+import { isGuardedStatus, notifyError, notifyResponseError, notifySuccess } from '../lib/notify';
+import { isPdfFile } from '../types';
+import { ConfirmDialog, ImageDialog, Modal, ModalButton } from './ui/Modal';
+import Pagination from './ui/Pagination';
+import { ScrollableTable, TABLE_HEAD_CLASS, TableMessageRow, Th } from './ui/DataTable';
+import { usePagination } from '../lib/usePagination';
+
+const PAYMENT_PROOFS = [
+  { key: 'deposit_payment_url', label: 'Deposit' },
+  { key: 'down_payment_url', label: 'Down Payment' },
+  { key: 'full_payment_url', label: 'Full Payment' },
+] as const;
+
+// Browsers cannot render a PDF inside <img>, so PDF proofs open in a new tab instead of a thumbnail.
+const PaymentProof: React.FC<{ filename: string; label: string }> = ({ filename, label }) =>
+  isPdfFile(filename) ? (
+    <a
+      href={fileUrl(filename)}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`Buka PDF bukti ${label} di tab baru`}
+      className="w-full h-32 flex flex-col items-center justify-center gap-1 rounded border border-gray-300 bg-gray-50 text-orange-700 hover:bg-orange-50 hover:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+    >
+      <FileText size={28} aria-hidden="true" />
+      <span className="text-sm font-semibold underline">Buka PDF</span>
+    </a>
+  ) : (
+    <img src={fileUrl(filename)} alt={label} className="w-full h-32 object-cover rounded shadow" />
+  );
+
+type EmailKind = 'invoice' | 'receipt';
+
+const EMAIL_COPY: Record<EmailKind, {
+  endpoint: string;
+  sent: string;
+  throttled: string;
+  notPaid: string | null;
+  failed: string;
+}> = {
+  invoice: {
+    endpoint: 'send-confirmation-email',
+    sent: 'Invoice terkirim ke email customer.',
+    throttled: 'Invoice untuk transaksi ini baru saja dikirim. Coba lagi setelah 10 menit.',
+    notPaid: null,
+    failed: 'Invoice gagal dikirim. Coba lagi beberapa saat lagi.',
+  },
+  receipt: {
+    endpoint: 'send-receipt-email',
+    sent: 'Bukti pembayaran terkirim ke email customer.',
+    throttled: 'Bukti pembayaran untuk transaksi ini baru saja dikirim. Coba lagi setelah 10 menit.',
+    notPaid: 'Transaksi ini belum lunas. Bukti pembayaran baru bisa dikirim setelah pelunasan dicatat.',
+    failed: 'Bukti pembayaran gagal dikirim. Coba lagi beberapa saat lagi.',
+  },
+};
+
+const EMAIL_NOT_FOUND = 'Transaksi tidak ditemukan atau sudah dihapus.';
+const DRY_RUN_NOTE = 'Mode uji aktif: email disimpan sebagai file, tidak dikirim.';
 
 interface Transaction {
   id: string;
@@ -67,17 +126,11 @@ const TransactionDatabase: React.FC = () => {
   const [Lunas, setLunas] = useState(false);
   const [fileErrors, setFileErrors] = useState({ deposit: '', dp: '', full: '' });
   const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [deleteReason, setDeleteReason] = useState('');
+  const [isSavingPayment, setIsSavingPayment] = useState(false);
   const [logPage, setLogPage] = useState(1);
   const [logTotalPages, setLogTotalPages] = useState(1);
   const logsPerPage = 5;
-  const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
-
-  const tableContainerRef = useRef<HTMLDivElement>(null);
-  const isDragging = useRef(false);
-  const startPos = useRef({ x: 0, y: 0 });
-  const scrollPos = useRef({ left: 0, top: 0 });
 
 
   const getActionColor = (action: string) => {
@@ -124,37 +177,25 @@ const TransactionDatabase: React.FC = () => {
   const [transactionLogs, setTransactionLogs] = useState<HistoryLog[]>([]);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
-  const PUBLIC_BASE = import.meta.env.VITE_API_PUBLIC_URL || '';
 
-  const [sendingEmailId, setSendingEmailId] = useState<string | null>(null);
-
-
-
-  const getValidUrl = (filename?: string) => {
-  if (!filename) return undefined;
-  return `${PUBLIC_BASE}/uploads/${filename}`;
-  };
-
+  const [sendingEmail, setSendingEmail] = useState<{ id: string; kind: EmailKind } | null>(null);
 
   useEffect(() => {
     fetchTransactions();
   }, []);
 
-  useEffect(() => {
-  if (sendingEmailId) {
-    console.log('Sedang kirim email untuk ID:', sendingEmailId);
-  }
-}, [sendingEmailId]);
-
   const fetchTransactions = async (): Promise<Transaction[]> => {
     try {
       const response = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/transaction`);
-      if (!response.ok) throw new Error('Gagal ambil data transaksi');
+      if (!response.ok) {
+        await notifyResponseError(response, 'Data transaksi gagal dimuat');
+        return [];
+      }
       const data = await response.json();
       setTransactions(data);
       return data;
     } catch (error) {
-      toast.error('Terjadi kesalahan saat mengambil data transaksi.');
+      notifyError(error, 'Data transaksi gagal dimuat');
       return [];
     } finally {
       setLoading(false);
@@ -165,84 +206,26 @@ const TransactionDatabase: React.FC = () => {
   const offset = (page - 1) * logsPerPage;
   try {
     const response = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/transaction/history/${transactionId}?offset=${offset}&limit=${logsPerPage}`);
-    if (!response.ok) throw new Error('Gagal ambil riwayat transaksi');
+    if (!response.ok) {
+      await notifyResponseError(response, 'Riwayat perubahan gagal dimuat');
+      return;
+    }
     const data = await response.json();
-    
+
     setTransactionLogs(data.history);
     setLogTotalPages(Math.ceil(data.total / logsPerPage)); // <- update total halaman
     setLogPage(page); // <- update halaman sekarang
   } catch (error) {
-    toast.error('Gagal memuat riwayat perubahan');
+    notifyError(error, 'Riwayat perubahan gagal dimuat');
   }
 };
 
-
-useEffect(() => {
-    const container = tableContainerRef.current;
-    if (!container) return;
-
-    const handleMouseDown = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (
-        target.closest('button') ||
-        target.closest('input') ||
-        target.closest('img') ||
-        target.tagName === 'BUTTON' ||
-        target.tagName === 'INPUT' ||
-        target.tagName === 'IMG'
-      ) return;
-
-      isDragging.current = true;
-      startPos.current = { x: e.clientX, y: e.clientY };
-      scrollPos.current = { left: container.scrollLeft, top: container.scrollTop };
-      container.style.cursor = 'grabbing';
-      container.style.userSelect = 'none';
-    };
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging.current) return;
-      e.preventDefault();
-      const dx = e.clientX - startPos.current.x;
-      const dy = e.clientY - startPos.current.y;
-      container.scrollLeft = scrollPos.current.left - dx;
-      container.scrollTop = scrollPos.current.top - dy;
-    };
-
-    const handleMouseUp = () => {
-      isDragging.current = false;
-      if (container) {
-        container.style.cursor = 'grab';
-        container.style.userSelect = '';
-      }
-    };
-
-    const handleMouseLeave = () => {
-      isDragging.current = false;
-      if (container) {
-        container.style.cursor = 'grab';
-        container.style.userSelect = '';
-      }
-    };
-
-    container.style.cursor = 'grab';
-
-    container.addEventListener('mousedown', handleMouseDown);
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-    container.addEventListener('mouseleave', handleMouseLeave);
-
-    return () => {
-      container.removeEventListener('mousedown', handleMouseDown);
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      container.removeEventListener('mouseleave', handleMouseLeave);
-    };
-  }, []);
 
 
   const handleUpdatePayment = async () => {
   if (!selectedTransaction) return;
 
+  setIsSavingPayment(true);
   try {
     const formData = new FormData();
 
@@ -265,9 +248,12 @@ useEffect(() => {
       body: formData,
     });
 
-    if (!response.ok) throw new Error('Gagal upload');
+    if (!response.ok) {
+      await notifyResponseError(response, 'Bukti pembayaran gagal diunggah');
+      return;
+    }
 
-    toast.success('Bukti pembayaran berhasil diunggah');
+    notifySuccess('Bukti pembayaran berhasil diunggah.');
     const updatedTransactions = await fetchTransactions();
     const updated = updatedTransactions.find((trx) => trx.id === selectedTransaction.id);
     if (updated) setSelectedTransaction(updated);
@@ -282,100 +268,72 @@ useEffect(() => {
     setFileErrors({ deposit: '', dp: '', full: '' });
     fetchTransactions();
   } catch (err) {
-    toast.error('Gagal mengunggah bukti pembayaran');
+    notifyError(err, 'Bukti pembayaran gagal diunggah');
+  } finally {
+    setIsSavingPayment(false);
   }
 };
 
- const handleSendInvoice = async (trx: Transaction) => {
-    if (!trx.email) {
-      toast.error('Email pelanggan tidak tersedia.');
-      return;
-    }
+  const closePaymentModal = () => {
+    setShowEditModal(false);
+    setDepositFile(null);
+    setDownPaymentFile(null);
+    setFullPaymentFile(null);
+    setFileErrors({ deposit: '', dp: '', full: '' });
+    if (selectedTransaction) fetchTransactionLogs(selectedTransaction.id);
+  };
+
+  // The server reads recipient, name, and amounts from the database; the client only names the transaction.
+  const sendTransactionEmail = async (trx: Transaction, kind: EmailKind) => {
+    if (sendingEmail) return;
+    const copy = EMAIL_COPY[kind];
+    setSendingEmail({ id: trx.id, kind });
 
     try {
-      const payload = {
-        to: trx.email,
-        customerName: trx.name,
-        bookingCode: trx.booking_code,
-        carType: trx.car_type,
-        startDate: formatDate(trx.start_date),
-        startTime: trx.start_time,
-        endDate: formatDate(trx.end_date),
-        deposit: trx.deposit,
-        discount: trx.discount,
-        needsTrip: trx.needs_trip,
-        needsDriver: trx.needs_driver,
-        needsDelivery: trx.needs_delivery,
-        needsPickup: trx.needs_pickup,
-        rentalCost: trx.grand_total || 0,
-        tripFee: trx.trip_fee,
-        driverFee: trx.driver_fee,
-        deliveryFee: trx.delivery_fee,
-        pickupFee: trx.pickup_fee,
-        grandTotal: trx.grand_total || 0
-      };
-
-      const response = await fetch(`${API_BASE_URL}/send-confirmation-email`, {
+      const response = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/${copy.endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ transaction_id: trx.id }),
       });
 
-      if (!response.ok) {
-      const errorData = await response.json(); // ⬅️ Ambil pesan error dari backend
-      const message = errorData?.error || 'Gagal mengirim invoice.';
-      toast.error(message); // ⬅️ Tampilkan langsung ke UI
-      return;
+      if (response.ok) {
+        const data = await response.json().catch(() => ({}));
+        toast.success(data?.dry_run ? `${copy.sent} ${DRY_RUN_NOTE}` : copy.sent);
+        fetchTransactions();
+        return;
+      }
+
+      // The session guard already shows its own toast for 401 and 403.
+      if (isGuardedStatus(response.status)) return;
+
+      switch (response.status) {
+        case 404:
+          toast.error(EMAIL_NOT_FOUND);
+          break;
+        case 409:
+          toast.error(copy.notPaid ?? (await responseMessage(response, copy.failed)));
+          break;
+        case 429:
+          toast.error(copy.throttled);
+          break;
+        case 422:
+          // 422 covers a missing email and inconsistent amounts; the server message says which.
+          toast.error(await responseMessage(response, copy.failed));
+          break;
+        default:
+          toast.error(copy.failed);
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error(copy.failed);
+    } finally {
+      setSendingEmail(null);
     }
-
-    toast.success('Invoice berhasil dikirim ke email pelanggan.');
-  } catch (err) {
-    console.error(err);
-    toast.error('Terjadi kesalahan jaringan.');
-  } finally {
-    setSendingEmailId(null);
-  }
-};
-
-const handleSendReceipt = async (trx: Transaction) => {
-  if (!trx.email) {
-    toast.error('Email pelanggan tidak tersedia.');
-    return;
-  }
-
-  try {
-    const payload = {
-      to: trx.email,
-      customerName: trx.name,
-      bookingCode: trx.booking_code,
-      carType: trx.car_type,
-      startDate: formatDate(trx.start_date),
-      startTime: trx.start_time,
-      endDate: formatDate(trx.end_date),
-      grandTotal: trx.grand_total || 0
-    };
-
-    const response = await fetch(`${API_BASE_URL}/send-receipt-email`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const data = await response.json();
-      toast.error(data?.message || 'Gagal mengirim receipt.');
-      return;
-    }
-
-    toast.success('Receipt berhasil dikirim ke email pelanggan.');
-  } catch (error) {
-    toast.error('Terjadi kesalahan saat mengirim receipt.');
-  }
-};
+  };
 
 
-  const handleDeleteTransaction = async () => {
-  if (!selectedTransaction || !deleteReason.trim()) return;
+  const handleDeleteTransaction = async (reason: string) => {
+  if (!selectedTransaction) return;
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
@@ -386,22 +344,23 @@ const handleSendReceipt = async (trx: Transaction) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        reason: deleteReason,
+        reason,
         user_id: user?.id,
         username: user?.username,
       }),
     });
 
-    if (!response.ok) throw new Error('Gagal menghapus transaksi');
+    if (!response.ok) {
+      await notifyResponseError(response, 'Transaksi gagal dihapus');
+      return;
+    }
 
-    toast.success('Transaksi berhasil dihapus.');
+    notifySuccess('Transaksi berhasil dihapus.');
     fetchTransactions();
-    setShowDeleteModal(false);
-    setDeleteReason('');
     setSelectedTransaction(null);
   } catch (error) {
     console.error(error);
-    toast.error('Terjadi kesalahan saat menghapus transaksi.');
+    notifyError(error, 'Transaksi gagal dihapus');
   }
 };
 
@@ -417,9 +376,9 @@ const handleSendReceipt = async (trx: Transaction) => {
     return;
   }
 
-  const validTypes = ['image/jpeg', 'image/jpg', 'application/pdf'];
+  const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
   if (!validTypes.includes(file.type)) {
-    setFileErrors((prev) => ({ ...prev, [type]: 'Format file harus JPG, JPEG, atau PDF' }));
+    setFileErrors((prev) => ({ ...prev, [type]: 'Format file harus JPG, JPEG, PNG, atau PDF' }));
     return;
   }
 
@@ -476,9 +435,17 @@ const filteredTransactions = transactions.filter((trx) => {
     XLSX.writeFile(workbook, 'data-transaksi.xlsx');
   };
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery, startDate, endDate]);
+  const {
+    page: currentPage,
+    setPage: setCurrentPage,
+    totalPages,
+    pageItems: pagedTransactions,
+    startIndex,
+  } = usePagination(
+    filteredTransactions,
+    itemsPerPage,
+    `${searchQuery}|${startDate?.getTime() ?? ''}|${endDate?.getTime() ?? ''}`,
+  );
 
   return (
     <div className="p-6">
@@ -535,45 +502,38 @@ const filteredTransactions = transactions.filter((trx) => {
   </div>
 ) : (
   <>
-
-{/* Drag instruction */}
-          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-            <p className="text-sm text-blue-700">
-              💡 <strong>Tips:</strong> Klik dan seret area kosong tabel (seperti header atau cell kosong) untuk menggulir horizontal/vertikal. Hindari menyeret pada tombol, gambar, atau elemen interaktif.
-            </p>
-          </div>
-
-
-    <div
-  ref={tableContainerRef}
-  className="overflow-auto rounded-lg border bg-white shadow select-none cursor-grab active:cursor-grabbing"
-  style={{ maxHeight: '65vh',
-    touchAction: 'none' }}
->
+    <ScrollableTable label="Tabel data transaksi">
       <table className="min-w-[1600px] w-full divide-y divide-gray-200 bg-white">
-        <thead className="bg-gray-50">
+        <thead className={TABLE_HEAD_CLASS}>
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Kode Booking</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nama</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tipe Mobil</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Durasi</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tanggal Mulai</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tanggal Selesai</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tipe Identitas</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Deposit</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">DP</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Full</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Lunas</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Log Kirim Invoice</th>
-                  <th className="px-6 py-3 text-left text-xs text-center font-medium text-gray-500 uppercase">Aksi</th>
+                  <Th>#</Th>
+                  <Th>Kode Booking</Th>
+                  <Th>Email</Th>
+                  <Th>Nama</Th>
+                  <Th>Tipe Mobil</Th>
+                  <Th>Durasi</Th>
+                  <Th>Tanggal Mulai</Th>
+                  <Th>Tanggal Selesai</Th>
+                  <Th>Tipe Identitas</Th>
+                  <Th>Deposit</Th>
+                  <Th>DP</Th>
+                  <Th>Full</Th>
+                  <Th>Lunas</Th>
+                  <Th>Log Kirim Invoice</Th>
+                  <Th>Aksi</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {filteredTransactions
-                  .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
-                  .map((trx) => (
+                {pagedTransactions.length === 0 && (
+                  <TableMessageRow colSpan={15}>
+                    {searchQuery.trim()
+                      ? `Tidak ada transaksi yang cocok dengan "${searchQuery.trim()}".`
+                      : 'Belum ada transaksi. Transaksi muncul di sini setelah booking disimpan dari Formulir Customer.'}
+                  </TableMessageRow>
+                )}
+                {pagedTransactions.map((trx, idx) => (
                     <tr key={trx.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 text-sm text-gray-600 tabular-nums">{startIndex + idx + 1}</td>
                       <td className="px-6 py-4 text-sm font-medium text-gray-900">{trx.booking_code}</td>
                       <td className="px-6 py-4 text-sm text-gray-500">{trx.email}</td>
                       <td className="px-6 py-4 text-sm text-gray-500">{trx.name}</td>
@@ -590,13 +550,13 @@ const filteredTransactions = transactions.filter((trx) => {
                           // reorder: 'Re-Order',
                         }[trx.identity_type || ''] || trx.identity_type || '-'}
                       </td>
-                      <td className="px-6 py-4 text-sm text-center text-gray-500">
+                      <td className="px-6 py-4 text-sm text-gray-500">
                         {trx.deposit_payment_url ? '✅' : '❌'}
                       </td>
-                      <td className="px-6 py-4 text-sm text-center text-gray-500">
+                      <td className="px-6 py-4 text-sm text-gray-500">
                         {trx.down_payment_url ? '✅' : '❌'}
                       </td>
-                      <td className="px-6 py-4 text-sm text-center text-gray-500">
+                      <td className="px-6 py-4 text-sm text-gray-500">
                         {trx.full_payment_url ? '✅' : '❌'}
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-500">
@@ -621,31 +581,40 @@ const filteredTransactions = transactions.filter((trx) => {
 
                       <td className="px-6 py-4 text-sm text-gray-500">
                         <div className="flex space-x-2">
-                          {sendingEmailId === trx.id ? (
-                            <div className="text-orange-500 animate-spin">
+                          {sendingEmail?.id === trx.id && sendingEmail.kind === 'invoice' ? (
+                            <div className="text-orange-500 animate-spin" role="status" aria-label="Mengirim invoice">
                               <Loader size={20} />
                             </div>
                           ) : (
                             <button
-                              onClick={() => handleSendInvoice(trx)}
-                              className="text-green-600 hover:text-green-700 transform hover:scale-110 transition duration-150"
+                              onClick={() => sendTransactionEmail(trx, 'invoice')}
+                              disabled={sendingEmail !== null}
+                              className="text-green-600 hover:text-green-700 transform hover:scale-110 transition duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
                               title="Kirim Invoice"
+                              aria-label="Kirim Invoice"
                             >
                               <Send size={20} />
                             </button>
                           )}
 
-                          {trx.lunas ? (
+                          {sendingEmail?.id === trx.id && sendingEmail.kind === 'receipt' ? (
+                            <div className="text-orange-500 animate-spin" role="status" aria-label="Mengirim bukti pembayaran">
+                              <Loader size={20} />
+                            </div>
+                          ) : trx.lunas ? (
                             <button
-                              onClick={() => handleSendReceipt(trx)}
-                              className="text-purple-600 hover:text-purple-700 transform hover:scale-110 transition duration-150"
-                              title="Kirim Receipt"
+                              onClick={() => sendTransactionEmail(trx, 'receipt')}
+                              disabled={sendingEmail !== null}
+                              className="text-purple-600 hover:text-purple-700 transform hover:scale-110 transition duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="Kirim bukti pembayaran"
+                              aria-label="Kirim bukti pembayaran"
                             >
                               <Receipt size={20} />
                             </button>
                           ) : (
                             <div
-                              title="Belum Lunas"
+                              title="Belum lunas"
+                              aria-label="Kirim bukti pembayaran, belum lunas"
                               className="text-gray-400 cursor-not-allowed"
                             >
                               <Receipt size={20} />
@@ -678,9 +647,9 @@ const filteredTransactions = transactions.filter((trx) => {
 
 
                               setExistingFiles({
-                                deposit: getValidUrl(trx.deposit_payment_url),
-                                dp: getValidUrl(trx.down_payment_url),
-                                full: getValidUrl(trx.full_payment_url),
+                                deposit: fileUrl(trx.deposit_payment_url),
+                                dp: fileUrl(trx.down_payment_url),
+                                full: fileUrl(trx.full_payment_url),
                               });
                               setShowEditModal(true);
                             } }
@@ -706,34 +675,31 @@ const filteredTransactions = transactions.filter((trx) => {
                   ))}
               </tbody>
             </table>
+    </ScrollableTable>
 
 
 
-
-            {showEditModal && selectedTransaction && (
-              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-                <div className="bg-white rounded-xl shadow-xl max-w-lg w-full">
-                  <div className="p-6">
-                    <div className="flex justify-between items-center mb-6">
-                      <h3 className="text-xl font-semibold text-gray-800">Upload Bukti Pembayaran</h3>
-                      <button
-                        onClick={() => {
-                          setShowEditModal(false);
-                          setDepositFile(null);
-                          setDownPaymentFile(null);
-                          setFullPaymentFile(null);
-                          setFileErrors({ deposit: '', dp: '', full: '' });
-
-                          if (selectedTransaction) {
-                            fetchTransactionLogs(selectedTransaction.id);
-                          }
-                        } }
-                        className="text-gray-500 hover:text-gray-700 text-xl font-bold"
-                      >
-                        ✕
-                      </button>
-                    </div>
-
+            <Modal
+              open={showEditModal && !!selectedTransaction}
+              onClose={closePaymentModal}
+              title="Upload Bukti Pembayaran"
+              size="md"
+              busy={isSavingPayment}
+              footer={
+                <>
+                  <ModalButton onClick={closePaymentModal} disabled={isSavingPayment}>Batal</ModalButton>
+                  <ModalButton
+                    variant="primary"
+                    onClick={handleUpdatePayment}
+                    disabled={isSubmitDisabled}
+                    busy={isSavingPayment}
+                    busyLabel="Menyimpan..."
+                  >
+                    Simpan
+                  </ModalButton>
+                </>
+              }
+            >
                     <div className="space-y-4">
                       {['deposit', 'dp', 'full'].map((type) => {
                         const file = type === 'deposit' ? depositFile :
@@ -756,14 +722,18 @@ const filteredTransactions = transactions.filter((trx) => {
                                 <div className="flex items-center gap-3">
                                   {/\.(jpg|jpeg|png)$/i.test(existingFile) ? (
                                     <div className="relative group flex flex-col items-start">
-                                      <img
-                                        src={existingFile}
-                                        alt="Bukti pembayaran"
-                                        className="w-24 h-16 object-cover rounded cursor-pointer border"
-                                        onClick={() => {
-                                          console.log('clicked');
-                                          setPreviewImageUrl(existingFile);
-                                        } } />
+                                      <button
+                                        type="button"
+                                        onClick={() => setPreviewImageUrl(existingFile)}
+                                        aria-label="Perbesar bukti pembayaran"
+                                        className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-700 focus-visible:ring-offset-2"
+                                      >
+                                        <img
+                                          src={existingFile}
+                                          alt="Bukti pembayaran"
+                                          className="w-24 h-16 object-cover rounded border"
+                                        />
+                                      </button>
                                       <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition pointer-events-none">
                                         <span className="text-white text-xs pointer-events-none">Klik untuk memperbesar</span>
                                       </div>
@@ -803,7 +773,7 @@ const filteredTransactions = transactions.filter((trx) => {
                               <div className="relative">
                                 <input
                                   type="file"
-                                  accept=".jpg,.jpeg,.pdf"
+                                  accept=".jpg,.jpeg,.png,.pdf"
                                   onChange={(e) => handleFileChange(e, type as 'deposit' | 'dp' | 'full')}
                                   className="w-full border border-gray-300 rounded-lg p-2 pr-10" />
                                 {file && (
@@ -837,7 +807,7 @@ const filteredTransactions = transactions.filter((trx) => {
 
 
                       <p className="text-xs text-gray-500 mt-1">
-                        Format: JPG, JPEG, PDF. Maksimal ukuran: <span className="font-semibold">1MB</span>
+                        Format: JPG, JPEG, PNG, PDF. Maksimal ukuran: <span className="font-semibold">1MB</span>
                       </p>
 
                       {/* Checklist Lunas */}
@@ -850,135 +820,36 @@ const filteredTransactions = transactions.filter((trx) => {
                           className="h-4 w-4 text-orange-500 border-gray-300 rounded" />
                         <label className="text-sm text-gray-700">Sudah Lunas</label>
                       </div>
-
-
-
-                      {/* Tombol */}
-                      <div className="flex justify-end space-x-3 mt-6">
-                        <button
-                          onClick={() => {
-                            setShowEditModal(false);
-                            setDepositFile(null);
-                            setDownPaymentFile(null);
-                            setFullPaymentFile(null);
-                            setFileErrors({ deposit: '', dp: '', full: '' });
-
-                            if (selectedTransaction) {
-                              fetchTransactionLogs(selectedTransaction.id); // ⬅️ Tambahin ini
-                            }
-
-                          } }
-                          className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-100"
-                        >
-                          Batal
-                        </button>
-                        <button
-                          onClick={handleUpdatePayment}
-                          disabled={isSubmitDisabled}
-                          className={`px-4 py-2 rounded-lg text-white font-semibold ${hasFileError || !hasAnyFile || requiresFullPayment
-                              ? 'bg-orange-200 cursor-not-allowed'
-                              : 'bg-orange-500 hover:bg-orange-600'}`}
-                        >
-                          Simpan
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {showDeleteModal && selectedTransaction && (
-              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-                <div className="bg-white rounded-xl shadow-xl max-w-lg w-full">
-                  <div className="p-6">
-                    <div className="flex items-center mb-6 text-red-600">
-                      <AlertCircle size={24} className="mr-2" />
-                      <h3 className="text-xl font-semibold">Konfirmasi Penghapusan</h3>
                     </div>
 
-                    <div className="space-y-4">
-                      <p className="text-gray-600">
-                        Anda akan menghapus data transaksi dengan kode booking:{' '}
-                        <span className="font-semibold">{selectedTransaction.booking_code}</span>
-                      </p>
+                    <ImageDialog src={previewImageUrl} alt="Bukti pembayaran" onClose={() => setPreviewImageUrl(null)} />
+            </Modal>
 
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Alasan Penghapusan <span className="text-red-500">*</span>
-                        </label>
-                        <textarea
-                          value={deleteReason}
-                          onChange={(e) => setDeleteReason(e.target.value)}
-                          className="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-red-500/50 focus:border-red-500"
-                          rows={3}
-                          placeholder="Masukkan alasan penghapusan transaksi..."
-                          required />
-                      </div>
-
-                      <div className="flex justify-end space-x-3">
-                        <button
-                          onClick={() => {
-                            setShowDeleteModal(false);
-                            setDeleteReason('');
-                          } }
-                          className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-                        >
-                          Batal
-                        </button>
-                        <button
-                          onClick={handleDeleteTransaction}
-                          disabled={!deleteReason.trim()}
-                          className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          Hapus
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {previewImageUrl && (
-              <div
-                className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50"
-                onClick={() => setPreviewImageUrl(null)}
-              >
-                <div className="relative">
-                  <img
-                    src={previewImageUrl}
-                    alt="Preview Gambar"
-                    className="max-w-[90vw] max-h-[90vh] rounded shadow-lg" />
-                  <button
-                    onClick={() => setPreviewImageUrl(null)}
-                    className="absolute top-2 right-2 text-white text-2xl font-bold bg-black bg-opacity-50 rounded-full px-3 py-1"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-            )}
-
-
+            <ConfirmDialog
+              open={showDeleteModal && !!selectedTransaction}
+              onClose={() => setShowDeleteModal(false)}
+              title="Hapus transaksi?"
+              description={
+                <>
+                  Transaksi <span className="font-semibold text-gray-900">{selectedTransaction?.booking_code}</span> akan
+                  dihapus dari daftar. Alasannya tercatat di riwayat perubahan.
+                </>
+              }
+              confirmLabel="Hapus transaksi"
+              reason={{ label: 'Alasan penghapusan', placeholder: 'Contoh: booking dibatalkan customer' }}
+              onConfirm={handleDeleteTransaction}
+            />
 
             {selectedTransaction && !showEditModal && !showDeleteModal && (
-              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-                <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-                  <div className="p-6">
-                    <div className="flex justify-between items-center mb-6">
-                      <h3 className="text-2xl font-semibold">Detail Transaksi</h3>
-                      <button
-                        onClick={() => {
-                          setSelectedTransaction(null);
-                          setTransactionLogs([]);
-                        } }
-                        className="text-gray-500 hover:text-gray-700"
-                      >
-                        ✕
-                      </button>
-                    </div>
-
+              <Modal
+                open
+                onClose={() => {
+                  setSelectedTransaction(null);
+                  setTransactionLogs([]);
+                }}
+                title="Detail Transaksi"
+                size="xl"
+              >
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       {/* Kiri - Info Booking & Penyewaan */}
                       <div className="space-y-4">
@@ -1101,33 +972,15 @@ const filteredTransactions = transactions.filter((trx) => {
                               </p>
                             ) : (
                               <div className="grid grid-cols-2 gap-4">
-                                {selectedTransaction.deposit_payment_url && (
-                                  <div>
-                                    <p className="text-sm text-gray-600">Deposit</p>
-                                    <img
-                                      src={getValidUrl(selectedTransaction.deposit_payment_url)}
-                                      alt="Deposit"
-                                      className="w-full h-32 object-cover rounded shadow" />
-                                  </div>
-                                )}
-                                {selectedTransaction.down_payment_url && (
-                                  <div>
-                                    <p className="text-sm text-gray-600">Down Payment</p>
-                                    <img
-                                      src={getValidUrl(selectedTransaction.down_payment_url)}
-                                      alt="Down Payment"
-                                      className="w-full h-32 object-cover rounded shadow" />
-                                  </div>
-                                )}
-                                {selectedTransaction.full_payment_url && (
-                                  <div>
-                                    <p className="text-sm text-gray-600">Full Payment</p>
-                                    <img
-                                      src={getValidUrl(selectedTransaction.full_payment_url)}
-                                      alt="Full Payment"
-                                      className="w-full h-32 object-cover rounded shadow" />
-                                  </div>
-                                )}
+                                {PAYMENT_PROOFS.map(({ key, label }) => {
+                                  const filename = selectedTransaction[key];
+                                  return filename ? (
+                                    <div key={key}>
+                                      <p className="text-sm text-gray-600">{label}</p>
+                                      <PaymentProof filename={filename} label={label} />
+                                    </div>
+                                  ) : null;
+                                })}
                               </div>
                             )}
                           </div>
@@ -1236,97 +1089,21 @@ const filteredTransactions = transactions.filter((trx) => {
 
                       </div>
                     </div>
-                  </div>
-                </div>
-              </div>
+              </Modal>
             )}
 
 
 
 
-          </div><div className="flex justify-between items-center mt-4">
-              <p className="text-sm text-gray-600">
-                Menampilkan {Math.min(itemsPerPage, filteredTransactions.length - (currentPage - 1) * itemsPerPage)} dari {filteredTransactions.length} transaksi
-              </p>
-              <div className="flex space-x-2">
-                <button
-                  onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
-                  disabled={currentPage === 1}
-                  className="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-50"
-                >
-                  &laquo;
-                </button>
-               {(() => {
-  const totalPages = Math.ceil(filteredTransactions.length / itemsPerPage);
-  const pages = [];
-  const current = currentPage;
-
-  const showLeftEllipsis = current > 6;
-  const showRightEllipsis = current < totalPages - 5;
-  const startPage = showLeftEllipsis ? Math.max(current - 4, 2) : 2;
-  const endPage = showRightEllipsis
-    ? Math.min(current + 4, totalPages - 1)
-    : totalPages - 1;
-
-  // Always show first page
-  pages.push(
-    <button
-      key={1}
-      onClick={() => setCurrentPage(1)}
-      className={`px-3 py-1 border rounded ${current === 1 ? 'bg-orange-500 text-white' : 'hover:bg-gray-100'}`}
-    >
-      1
-    </button>
-  );
-
-  // Left Ellipsis
-  if (showLeftEllipsis) {
-    pages.push(<span key="left-ellipsis" className="px-2">...</span>);
-  }
-
-  // Page range
-  for (let i = startPage; i <= endPage; i++) {
-    pages.push(
-      <button
-        key={i}
-        onClick={() => setCurrentPage(i)}
-        className={`px-3 py-1 border rounded ${current === i ? 'bg-orange-500 text-white' : 'hover:bg-gray-100'}`}
-      >
-        {i}
-      </button>
-    );
-  }
-
-  // Right Ellipsis
-  if (showRightEllipsis) {
-    pages.push(<span key="right-ellipsis" className="px-2">...</span>);
-  }
-
-  // Last Page
-  if (totalPages > 1) {
-    pages.push(
-      <button
-        key={totalPages}
-        onClick={() => setCurrentPage(totalPages)}
-        className={`px-3 py-1 border rounded ${current === totalPages ? 'bg-orange-500 text-white' : 'hover:bg-gray-100'}`}
-      >
-        {totalPages}
-      </button>
-    );
-  }
-
-  return pages;
-})()}
-                <button
-                  onClick={() => setCurrentPage((prev) => Math.min(prev + 1, Math.ceil(filteredTransactions.length / itemsPerPage))
-                  )}
-                  disabled={currentPage === Math.ceil(filteredTransactions.length / itemsPerPage)}
-                  className="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-50"
-                >
-                  &raquo;
-                </button>
-              </div>
-            </div></>
+          <Pagination
+            page={currentPage}
+            totalPages={totalPages}
+            totalItems={filteredTransactions.length}
+            pageCount={pagedTransactions.length}
+            startIndex={startIndex}
+            onPageChange={setCurrentPage}
+            itemLabel="transaksi"
+          /></>
       )}
 
     </div>

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, } from 'react';
 import { CreditCard, Plus, Edit, Trash2, Star, Settings as SettingsIcon } from 'lucide-react';
-import toast from 'react-hot-toast';
+import { notifyError, notifyResponseError, notifySuccess } from '../lib/notify';
+import { ConfirmDialog } from './ui/Modal';
+import WebConfigSettings from './WebConfigSettings';
 
 interface BankAccount {
   id: string;
@@ -54,6 +56,23 @@ const Settings: React.FC = () => {
     });
   };
 
+  const [bankToDelete, setBankToDelete] = useState<BankAccount | null>(null);
+  const [isSavingBank, setIsSavingBank] = useState(false);
+
+  // The API answers in snake_case; reading it raw after a save left every field blank.
+  const loadBankAccounts = async () => {
+    const response = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/bank-accounts`);
+    if (!response.ok) return;
+    const data = await response.json();
+    setBankAccounts(data.map((item: { id: string; bank_name: string; logo_url: string; account_number: string; account_holder_name: string }) => ({
+      id: item.id,
+      bankName: item.bank_name,
+      logoUrl: item.logo_url,
+      accountNumber: item.account_number,
+      accountHolderName: item.account_holder_name,
+    })));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
 
@@ -68,32 +87,34 @@ const Settings: React.FC = () => {
     user_id: user?.id || null
   };
 
+  const action = editingAccount ? 'Rekening gagal diperbarui' : 'Rekening gagal ditambahkan';
+  setIsSavingBank(true);
   try {
-    if (editingAccount) {
-      // Edit mode
-      await fetch(`${API_BASE_URL.replace(/\/$/, '')}/bank-accounts/${editingAccount.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-    } else {
-      // Tambah baru
-      await fetch(`${API_BASE_URL.replace(/\/$/, '')}/bank-accounts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+    const res = editingAccount
+      ? await fetch(`${API_BASE_URL.replace(/\/$/, '')}/bank-accounts/${editingAccount.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+      : await fetch(`${API_BASE_URL.replace(/\/$/, '')}/bank-accounts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+    if (!res.ok) {
+      await notifyResponseError(res, action);
+      return;
     }
 
-    // Refresh data
-    const response = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/bank-accounts`);
-    const updatedData = await response.json();
-    setBankAccounts(updatedData);
-    toast.success(editingAccount ? 'Rekening berhasil diperbarui.' : 'Rekening berhasil ditambahkan.');
+    notifySuccess(editingAccount ? 'Rekening berhasil diperbarui.' : 'Rekening berhasil ditambahkan.');
     resetForm();
+    await loadBankAccounts();
   } catch (err) {
     console.error('Gagal simpan rekening:', err);
-    toast.error('Terjadi kesalahan saat menyimpan rekening.');
+    notifyError(err, action);
+  } finally {
+    setIsSavingBank(false);
   }
 };
 
@@ -113,20 +134,22 @@ const Settings: React.FC = () => {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   try {
-    await fetch(`${API_BASE_URL.replace(/\/$/, '')}/bank-accounts/delete/${id}`, {
+    const res = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/bank-accounts/delete/${id}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_id: user.id }) // <- kirim user_id ke backend
     });
 
-    // Refresh
-    const response = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/bank-accounts`);
-    const updatedData = await response.json();
-    setBankAccounts(updatedData);
-    toast.success('Rekening berhasil dihapus.');
+    if (!res.ok) {
+      await notifyResponseError(res, 'Rekening gagal dihapus');
+      return;
+    }
+
+    notifySuccess('Rekening berhasil dihapus.');
+    await loadBankAccounts();
   } catch (err) {
     console.error('Gagal hapus rekening:', err);
-    toast.error('Terjadi kesalahan saat menghapus rekening.');
+    notifyError(err, 'Rekening gagal dihapus');
   }
 };
 
@@ -163,101 +186,6 @@ useEffect(() => {
       .catch(err => console.error('Gagal ambil bank:', err));
   }, []);
 
-
-  // 🔽 ✅ WebConfig States
-  interface WebConfig {
-  id?: string; // ← tambahkan id (opsional), karena data baru belum tentu punya
-  description: string;
-  url_image: string;
-}
-
-const [webConfigs, setWebConfigs] = useState<WebConfig[]>([
-  { description: 'Fav Icon', url_image: '' },
-  { description: 'Logo', url_image: '' },
-  { description: 'Tanda Tangan', url_image: '' }
-]);
-
-
-  useEffect(() => {
-  fetch(`${API_BASE_URL.replace(/\/$/, '')}/web-configs`)
-    .then((res) => res.json())
-    .then((data) => {
-      if (Array.isArray(data)) {
-        setWebConfigs(data); // ← Update dari backend
-      }
-    })
-    .catch((err) => {
-      console.error('Gagal ambil web config:', err);
-    });
-}, []);
-
-  type WebConfigField = 'description' | 'url_image';
-
-  const updateWebConfig = (
-    index: number,
-    field: WebConfigField,
-    value: string
-  ) => {
-    const newConfigs = [...webConfigs];
-    newConfigs[index][field] = value;
-    setWebConfigs(newConfigs);
-  };
-
-  const addWebConfigField = () => {
-    setWebConfigs([...webConfigs, { description: '', url_image: '' }]);
-  };
-
-  const saveWebConfigs = async () => {
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
-
-  for (const config of webConfigs) {
-    if (!config.description || !config.url_image) continue;
-
-    try {
-      const res = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/web-configs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          description: config.description,
-          url_image: config.url_image,
-          created_by: user.username,
-          updated_by: user.username,
-          user_id: user.id
-        })
-      });
-
-      if (res.status === 409) {
-        const data = await res.json();
-        toast.error(`❗ ${data.message}`);
-        continue;
-      }
-
-      if (!res.ok) throw new Error();
-
-      await res.json(); // bisa dipakai kalau mau update UI lebih lanjut
-    } catch (err) {
-      console.error('Gagal simpan web config:', err);
-      toast.error(`Gagal menyimpan: ${config.description}`);
-    }
-  }
-
-  toast.success('Pengaturan web berhasil disimpan.');
-};
-
-const deleteWebConfigFromDB = async (id: string) => {
-    const user = JSON.parse(localStorage.getItem('user') || '{}');
-
-    try {
-    const res = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/web-configs/${id}?user_id=${user.id}`, {
-      method: 'DELETE'
-    });
-
-    if (!res.ok) throw new Error();
-  } catch (err) {
-    console.error('Gagal hapus web config dari database:', err);
-    toast.error('Gagal hapus dari database.');
-  }
-};
 
 const [dailyPoint, setDailyPoint] = useState<number>(1);
 const [monthlyPoint, setMonthlyPoint] = useState<number>(25);
@@ -296,16 +224,21 @@ const handleSaveLoyaltySettings = async () => {
     console.log('Payload yang dikirim ke backend:', payload); // ✅ Tambahkan ini
 
 
-    await fetch(`${API_BASE_URL.replace(/\/$/, '')}/loyalty-settings`, {
+    const res = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/loyalty-settings`, {
       method: 'POST', // atau 'PUT' jika endpoint mengharuskan update
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
 
-    toast.success('Pengaturan loyalty berhasil disimpan.');
+    if (!res.ok) {
+      await notifyResponseError(res, 'Pengaturan loyalty gagal disimpan');
+      return;
+    }
+
+    notifySuccess('Pengaturan loyalty berhasil disimpan.');
   } catch (error) {
     console.error('Gagal simpan loyalty setting:', error);
-    toast.error('Terjadi kesalahan saat menyimpan pengaturan.');
+    notifyError(error, 'Pengaturan loyalty gagal disimpan');
   }
 };
 
@@ -321,7 +254,7 @@ const handleSaveLoyaltySettings = async () => {
             </div>
             <div>
               <h1 className="text-2xl font-bold text-gray-900">Pengaturan</h1>
-              <p className="text-gray-600">Kelola akun bank dan pengaturan loyalty poin</p>
+              <p className="text-gray-600">Kelola rekening bank, pengaturan web, dan loyalty poin</p>
             </div>
           </div>
         </div>
@@ -425,9 +358,11 @@ const handleSaveLoyaltySettings = async () => {
                   </button>
                   <button
                     type="submit"
-                    className="bg-orange-600 text-white px-6 py-2 rounded-lg hover:bg-orange-700 transition-colors"
+                    disabled={isSavingBank}
+                    aria-busy={isSavingBank || undefined}
+                    className="bg-orange-600 text-white px-6 py-2 rounded-lg hover:bg-orange-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {editingAccount ? 'Update Rekening' : 'Simpan Rekening'}
+                    {isSavingBank ? 'Menyimpan...' : editingAccount ? 'Update Rekening' : 'Simpan Rekening'}
                   </button>
                 </div>
               </form>
@@ -493,12 +428,14 @@ const handleSaveLoyaltySettings = async () => {
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleEdit(account)}
+                        aria-label={`Ubah rekening ${account.bankName}`}
                         className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                       >
                         <Edit className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={() => handleDelete(account.id)}
+                        onClick={() => setBankToDelete(account)}
+                        aria-label={`Hapus rekening ${account.bankName}`}
                         className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -512,87 +449,7 @@ const handleSaveLoyaltySettings = async () => {
         </div>
 
 
-            <div className="bg-white rounded-xl shadow-sm p-6 mt-8">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="p-2 bg-pink-100 rounded-lg">
-            <SettingsIcon className="w-5 h-5 text-pink-600" />
-          </div>
-          <div>
-            <h2 className="text-xl font-semibold text-gray-900">Pengaturan Web</h2>
-            <p className="text-gray-600">Atur logo, favicon, dan lainnya</p>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          {webConfigs.map((item, index) => (
-            <div key={index} className="grid md:grid-cols-2 gap-4">
-              <input
-                type="text"
-                placeholder="Deskripsi (contoh: Fav Icon)"
-                className="border px-3 py-2 rounded-lg w-full"
-                value={item.description}
-                onChange={(e) => updateWebConfig(index, 'description', e.target.value)}
-              />
-              <div className="flex items-center gap-3">
-  <input
-    type="url"
-    placeholder="URL Gambar"
-    className="border px-3 py-2 rounded-lg w-full"
-    value={item.url_image}
-    onChange={(e) => updateWebConfig(index, 'url_image', e.target.value)}
-  />
-  {item.url_image && (
-    <div className="relative w-12 h-12">
-      <img
-        src={item.url_image}
-        alt="Preview"
-        className="w-12 h-12 rounded object-cover border"
-        onError={(e) => {
-          e.currentTarget.src = '/fallback.png';
-        }}
-      />
-      <button
-          onClick={async () => {
-            const updated = [...webConfigs];
-            const configToDelete = updated[index];
-
-            if (configToDelete.id) {
-              await deleteWebConfigFromDB(configToDelete.id); // ← Hapus dari DB
-            }
-
-            updated.splice(index, 1); // ← Hapus dari UI
-            setWebConfigs(updated);
-          }}
-          className="absolute -top-2 -right-2 w-5 h-5 text-xs text-white bg-red-500 rounded-full flex items-center justify-center shadow"
-          title="Hapus Gambar & Baris"
-        >
-          ×
-        </button>
-    </div>
-  )}
-</div>
-            </div>
-          ))}
-
-          <div className="flex justify-between items-center mt-4">
-            <button
-              className="flex items-center space-x-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:from-orange-600 hover:to-yellow-600"
-              onClick={addWebConfigField}
-            >
-              + Tambah Deskripsi
-            </button>
-            <button
-              className="flex items-center space-x-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:from-orange-600 hover:to-yellow-600"
-              onClick={saveWebConfigs}
-            >
-              Simpan Pengaturan Web
-            </button>
-          </div>
-        </div>
-      </div>
-
-
-
+        <WebConfigSettings />
 
         {/* Loyalty Points Section */}
         <div className="bg-white rounded-xl shadow-sm p-6">
@@ -729,6 +586,22 @@ const handleSaveLoyaltySettings = async () => {
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!bankToDelete}
+        onClose={() => setBankToDelete(null)}
+        title="Hapus rekening?"
+        description={
+          <>
+            Rekening <span className="font-semibold text-gray-900">{bankToDelete?.bankName}</span>{' '}
+            {bankToDelete?.accountNumber} atas nama {bankToDelete?.accountHolderName} akan dihapus dan tidak tampil
+            lagi di daftar.
+          </>
+        }
+        confirmLabel="Hapus rekening"
+        onConfirm={() => (bankToDelete ? handleDelete(bankToDelete.id) : undefined)}
+      />
+
     </div>
   );
 };

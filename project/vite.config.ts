@@ -16,6 +16,9 @@ export default defineConfig({
   },
   // server config hanya untuk dev, tidak digunakan saat build
   server: {
+    // Harus sama dengan ALLOWED_ORIGINS di lib/auth.js; strictPort supaya tidak pindah diam-diam ke port lain.
+    port: 5180,
+    strictPort: true,
     proxy: {
       '/api': {
         target: 'http://localhost:5000',

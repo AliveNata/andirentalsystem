@@ -17,7 +17,9 @@ interface LogItem {
 }
 
 
-const renderKeyValueIndented = (obj: Record<string, any>) => {
+const API_BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
+
+const renderKeyValueIndented =(obj: Record<string, any>) => {
   return Object.entries(obj).map(([key, value]) => (
     <div key={key} className="ml-4">
       <span className="font-mono">{key}</span>: {String(value)}
@@ -35,8 +37,11 @@ const ActivityLog: React.FC = () => {
   const [endDate, setEndDate] = useState<Date | null>(null);
 
   useEffect(() => {
-    fetch('http://localhost:5000/history-logs') // sesuaikan jika URL beda
-      .then((res) => res.json())
+    fetch(`${API_BASE_URL}/history-logs`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
       .then((data) => setLogs(data))
       .catch((err) => console.error('Error fetching logs:', err));
   }, []);

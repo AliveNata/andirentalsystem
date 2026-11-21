@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { LogIn, Eye, EyeOff, Sun, Moon } from 'lucide-react';
+import { Eye, EyeOff, Sun, Moon } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+
+import { DEFAULT_LOGO, fetchPublicWebConfig } from '../lib/webConfig';
 
 type LoginProps = {
   onLogin: (username: string, password: string) => void;
@@ -62,20 +64,15 @@ function Login({ onLogin }: LoginProps) {
     transition: { delay, duration: 0.5, ease: 'easeOut' },
   });
 
-  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [logoUrl, setLogoUrl] = useState<string>(DEFAULT_LOGO);
 
   useEffect(() => {
   const fetchLogo = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/web-config/logo`);
-      const data = await res.json();
-      if (res.ok) {
-        setLogoUrl(data?.url_image);
-      } else {
-        console.error('Gagal ambil logo:', data);
-      }
-    } catch (err) {
-      console.error('Error fetching logo:', err);
+      const { logo } = await fetchPublicWebConfig();
+      if (logo) setLogoUrl(logo);
+    } catch {
+      // Logo bawaan tetap tampil kalau logo dari Pengaturan tidak bisa diambil.
     }
   };
 
@@ -103,15 +100,16 @@ function Login({ onLogin }: LoginProps) {
           <motion.div {...fadeUp(0)}>
             <div className="flex justify-center mb-6">
               <div className="flex justify-center mb-6">
-  {logoUrl ? (
-    <img
-      src={logoUrl}
-      alt="Logo"
-      className="h-24 w-24 rounded-full object-cover shadow-lg border-4 border-white dark:border-gray-700"
-    />
-  ) : (
-    <LogIn size={48} className="text-orange-500" />
-  )}
+  <img
+    src={logoUrl}
+    alt="Andi Rental Mobil Jakarta"
+    width={96}
+    height={96}
+    onError={() => {
+      if (logoUrl !== DEFAULT_LOGO) setLogoUrl(DEFAULT_LOGO);
+    }}
+    className="h-24 w-24 object-contain"
+  />
 </div>
             </div>
           </motion.div>
