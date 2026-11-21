@@ -116,11 +116,13 @@ CREATE POLICY "Anyone can view cars"
 
 
 
--- Insert default superadmin user
+-- Insert default superadmin user.
+-- Password tidak disimpan di repo. Jalankan file ini dengan:
+--   psql -v admin_password='<password>' -f "DB/dim_user & dim_cars.sql"
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 INSERT INTO dim_user (username, password, level)
-VALUES ('andirental', crypt('admin123', gen_salt('bf')), 'superadmin');
+VALUES ('andirental', crypt(:'admin_password', gen_salt('bf')), 'superadmin');
 
 -- Create updated_at triggers
 CREATE OR REPLACE FUNCTION update_updated_at_column()
