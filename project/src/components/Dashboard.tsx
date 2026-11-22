@@ -1,5 +1,4 @@
 import React, { useState,useEffect, useMemo, useRef, useCallback } from 'react';
-import { Users, FileText, Settings, Home, Car, List, IdCardLanyard, Stamp, BadgeDollarSign  } from 'lucide-react';
 import { CustomerForm, MarriedCustomerForm, SingleCustomerForm, CorporateCustomerForm, ForeignerCustomerForm, ReorderCustomerForm, CarRate, estimateBooking, readServerError } from '../types';
 import { MarriedForm, SingleForm, CorporateForm, ForeignerForm, ReorderForm } from './IdentityForms';
 import TermsAndConditions from './TermsAndConditions';
@@ -10,17 +9,23 @@ import TransactionDatabase from './TransactionDatabase';
 import EmployeeManagement from './EmployeeManagement';
 import CarManagement from './CarManagement';
 import ActivityLog from './ActivityLog';
+import WelcomeSummary from './WelcomeSummary';
 import Setting from './Settings';
 import numeral from 'numeral';
 import Select from 'react-select';
 import { toast } from 'react-hot-toast';
 import ExistingCustomerNotice from './ExistingCustomerNotice';
 import { useCustomerLookup } from '../lib/useCustomerLookup';
+import { DESKTOP_QUERY, useMediaQuery } from '../lib/useMediaQuery';
+import { MobileNavDrawer, SidebarNav, type DashboardSection } from './SidebarNav';
 
 
 
 interface DashboardProps {
+  // Desktop (lg and up) inline sidebar; below lg the menu is the drawer.
   isSidebarOpen: boolean;
+  isMobileNavOpen: boolean;
+  onMobileNavChange: (open: boolean) => void;
 }
 
 type IdentityData = {
@@ -35,6 +40,13 @@ const deliveryOptions = [
   25000, 50000, 75000, 100000, 125000,
   150000, 175000, 200000, 225000, 250000,
   275000, 300000
+];
+
+const SERVICE_OPTIONS: { key: 'needsTrip' | 'needsDriver' | 'needsDelivery' | 'needsPickup'; label: string }[] = [
+  { key: 'needsTrip', label: 'Biaya Luar Kota' },
+  { key: 'needsDriver', label: 'Butuh Supir' },
+  { key: 'needsDelivery', label: 'Butuh Antar' },
+  { key: 'needsPickup', label: 'Butuh Jemput' },
 ];
 
 const EMPTY_MARRIED: MarriedCustomerForm = {
@@ -112,8 +124,13 @@ const EMPTY_REORDER: ReorderCustomerForm = {
   address: '',
 };
 
-function Dashboard({ isSidebarOpen }: DashboardProps) {
-  const [activeSection, setActiveSection] = useState<'welcome' | 'customer' | 'database' | 'transaction' | 'employee' | 'car' | 'activitylog' | 'loyalty' | 'setting'>('welcome');
+function Dashboard({ isSidebarOpen, isMobileNavOpen, onMobileNavChange }: DashboardProps) {
+  const [activeSection, setActiveSection] = useState<DashboardSection>('welcome');
+  const isDesktop = useMediaQuery(DESKTOP_QUERY);
+  const handleNavigate = (section: DashboardSection) => {
+    setActiveSection(section);
+    onMobileNavChange(false);
+  };
   const [showIdentityForm, setShowIdentityForm] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
   const [showBookingConfirmation, setShowBookingConfirmation] = useState(false);
@@ -418,248 +435,29 @@ const handleFinalSubmit = async () => {
   };
 
   return (
-    <div className="flex h-[calc(100vh-4rem)]">
-      {isSidebarOpen && (
-        <div className="w-64 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 shadow-md p-6">
+    // Below lg there is no fixed height: the document scrolls, not a panel inside it. flex-1 in the
+    // App column still stretches a short page so the footer stays at the bottom of the screen.
+    <div className="flex flex-1 flex-col lg:h-[calc(100dvh-4rem)] lg:flex-none lg:flex-row">
+      {isSidebarOpen && isDesktop && (
+        <div className="hidden w-64 shrink-0 overflow-y-auto bg-white p-6 text-gray-800 shadow-md dark:bg-gray-800 dark:text-gray-100 lg:block">
           <h2 className="text-xl font-semibold mb-6 text-gray-800 dark:text-gray-100">Menu</h2>
-          <nav className="space-y-4">
-            <a 
-              href="#" 
-              onClick={() => setActiveSection('welcome')}
-              className="group flex items-center space-x-3 transition-colors"
-            >
-              <Home
-                size={20}
-                className={`transition-colors ${
-                  activeSection === 'welcome'
-                    ? 'stroke-orange-500'
-                    : 'stroke-gray-600 dark:stroke-white group-hover:stroke-orange-500'
-                }`}
-              />
-              <span
-                className={`transition-colors ${
-                  activeSection === 'welcome'
-                    ? 'text-orange-500'
-                    : 'text-gray-600 dark:text-white group-hover:text-orange-500'
-                }`}
-              >
-                Welcome
-              </span>
-            </a>
-            <a 
-              href="#" 
-              onClick={() => setActiveSection('customer')}
-              className="group flex items-center space-x-3 transition-colors"
-            >
-              <Users
-                size={20}
-                className={`transition-colors
-                  ${
-                    activeSection === 'customer'
-                      ? 'stroke-orange-500'
-                      : 'stroke-gray-600 dark:stroke-white group-hover:stroke-orange-500'
-                  }`}
-              />
-              <span
-                className={`transition-colors 
-                  ${activeSection === 'customer'
-                    ? 'text-orange-500'
-                    : 'text-gray-600 dark:text-white group-hover:text-orange-500'}`}
-              >
-                Formulir Customer
-              </span>
-            </a>
-
-            <a 
-              href="#" 
-              onClick={() => setActiveSection('database')}
-              className="group flex items-center space-x-3 transition-colors"
-            >
-              <FileText
-                size={20}
-                className={`transition-colors ${
-                  activeSection === 'database'
-                    ? 'stroke-orange-500'
-                    : 'stroke-gray-600 dark:stroke-white group-hover:stroke-orange-500'
-                }`}
-              />
-              <span
-                className={`transition-colors ${
-                  activeSection === 'database'
-                    ? 'text-orange-500'
-                    : 'text-gray-600 dark:text-white group-hover:text-orange-500'
-                }`}
-              >
-                Database Customer
-              </span>
-            </a>
-
-            <a 
-              href="#"
-              onClick={() => setActiveSection('loyalty')}
-              className="group flex items-center space-x-3 transition-colors"
-            >
-              <Stamp
-                size={20}
-                className={`transition-colors ${
-                  activeSection === 'loyalty'
-                    ? 'stroke-orange-500'
-                    : 'stroke-gray-600 dark:stroke-white group-hover:stroke-orange-500'
-                }`}
-              />
-              <span
-                className={`transition-colors ${
-                  activeSection === 'loyalty'
-                    ? 'text-orange-500'
-                    : 'text-gray-600 dark:text-white group-hover:text-orange-500'
-                }`}
-              >
-                Loyalty Customer
-              </span>
-            </a>
-
-            <a 
-              href="#" 
-              onClick={() => setActiveSection('transaction')}
-              className="group flex items-center space-x-3 transition-colors"
-            >
-              <BadgeDollarSign
-                size={20}
-                className={`transition-colors ${
-                  activeSection === 'transaction'
-                    ? 'stroke-orange-500'
-                    : 'stroke-gray-600 dark:stroke-white group-hover:stroke-orange-500'
-                }`}
-              />
-              <span
-                className={`transition-colors ${
-                  activeSection === 'transaction'
-                    ? 'text-orange-500'
-                    : 'text-gray-600 dark:text-white group-hover:text-orange-500'
-                }`}
-              >
-                Transaksi
-              </span>
-            </a>
-
-            <a 
-              href="#" 
-              onClick={() => setActiveSection('employee')}
-              className="group flex items-center space-x-3 transition-colors"
-            >
-              <IdCardLanyard
-                size={20}
-                className={`transition-colors ${
-                  activeSection === 'employee'
-                    ? 'stroke-orange-500'
-                    : 'stroke-gray-600 dark:stroke-white group-hover:stroke-orange-500'
-                }`}
-              />
-              <span
-                className={`transition-colors ${
-                  activeSection === 'employee'
-                    ? 'text-orange-500'
-                    : 'text-gray-600 dark:text-white group-hover:text-orange-500'
-                }`}
-              >
-                Karyawan
-              </span>
-            </a>
-            
-            <a 
-              href="#" 
-              onClick={() => setActiveSection('car')}
-              className="group flex items-center space-x-3 transition-colors"
-            >
-              <Car
-                size={20}
-                className={`transition-colors ${
-                  activeSection === 'car'
-                    ? 'stroke-orange-500'
-                    : 'stroke-gray-600 dark:stroke-white group-hover:stroke-orange-500'
-                }`}
-              />
-              <span
-                className={`transition-colors ${
-                  activeSection === 'car'
-                    ? 'text-orange-500'
-                    : 'text-gray-600 dark:text-white group-hover:text-orange-500'
-                }`}
-              >
-                Mobil
-              </span>
-            </a>
-
-            <a 
-              href="#" 
-              onClick={() => setActiveSection('activitylog')}
-              className="group flex items-center space-x-3 transition-colors"
-            >
-              <List
-                size={20}
-                className={`transition-colors ${
-                  activeSection === 'activitylog'
-                    ? 'stroke-orange-500'
-                    : 'stroke-gray-600 dark:stroke-white group-hover:stroke-orange-500'
-                }`}
-              />
-              <span
-                className={`transition-colors ${
-                  activeSection === 'activitylog'
-                    ? 'text-orange-500'
-                    : 'text-gray-600 dark:text-white group-hover:text-orange-500'
-                }`}
-              >
-                Aktifitas Log
-              </span>
-            </a>
-
-            <a 
-            href="#" 
-            onClick={() => setActiveSection('setting')}
-            className="group flex items-center space-x-3 transition-colors"
-          >
-            <Settings
-              size={20}
-              className={`transition-colors ${
-                activeSection === 'setting'
-                  ? 'stroke-orange-500'
-                  : 'stroke-gray-600 dark:stroke-white group-hover:stroke-orange-500'
-              }`}
-            />
-            <span
-              className={`transition-colors ${
-                activeSection === 'setting'
-                  ? 'text-orange-500'
-                  : 'text-gray-600 dark:text-white group-hover:text-orange-500'
-              }`}
-            >
-              Pengaturan
-            </span>
-          </a>
-          </nav>
+          <SidebarNav activeSection={activeSection} onNavigate={handleNavigate} />
         </div>
       )}
-      <div className="flex-1 p-6 bg-gray-50 overflow-auto">
+      <MobileNavDrawer
+        open={isMobileNavOpen}
+        onOpenChange={onMobileNavChange}
+        activeSection={activeSection}
+        onNavigate={handleNavigate}
+      />
+      {/* min-w-0 stops a wide table from stretching this flex child past the viewport. */}
+      <div className="min-w-0 flex-1 bg-gray-50 px-4 py-4 sm:p-6 lg:overflow-auto">
         {activeSection === 'welcome' ? (
           <div className="max-w-4xl mx-auto">
-            <div className="bg-gradient-to-r from-orange-500 to-orange-600 rounded-xl shadow-lg p-8">
-              <h2 className="text-3xl font-bold text-white mb-3">Selamat Datang di Dashboard Andi Rental Mobil Jakarta</h2>
+            <div className="bg-gradient-to-r from-orange-500 to-orange-600 rounded-xl shadow-lg p-6 sm:p-8">
+              <h2 className="text-2xl sm:text-3xl font-bold text-white mb-3">Selamat Datang di Dashboard Andi Rental Mobil Jakarta</h2>
               <p className="text-orange-50 text-lg">Kelola operasional rental mobil Anda secara efisien dengan sistem yang komprehensif.</p>
-              <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-white/10 rounded-lg p-4 backdrop-blur-sm">
-                  <h3 className="text-white font-semibold mb-1">Rental Aktif</h3>
-                  <p className="text-orange-50">12 kendaraan sedang disewa saat ini</p>
-                </div>
-                <div className="bg-white/10 rounded-lg p-4 backdrop-blur-sm">
-                  <h3 className="text-white font-semibold mb-1">Mobil Tersedia</h3>
-                  <p className="text-orange-50">28 kendaraan siap untuk disewa</p>
-                </div>
-                <div className="bg-white/10 rounded-lg p-4 backdrop-blur-sm">
-                  <h3 className="text-white font-semibold mb-1">Pemesanan Hari Ini</h3>
-                  <p className="text-orange-50">5 pemesanan baru</p>
-                </div>
-              </div>
+              <WelcomeSummary />
             </div>
           </div>
         ) : activeSection === 'database' ? (
@@ -682,8 +480,8 @@ const handleFinalSubmit = async () => {
         ) : (
           <div className="max-w-4xl mx-auto">
             {!showIdentityForm && !showTerms && !showBookingConfirmation ? (
-              <div className="bg-white rounded-xl shadow-lg p-8">
-                <h2 className="text-2xl font-semibold mb-6 text-selection-safe">Formulir Customer</h2>
+              <div className="bg-white rounded-xl shadow-lg p-4 sm:p-8">
+                <h2 className="text-xl sm:text-2xl font-semibold mb-6 text-selection-safe">Formulir Customer</h2>
                 <p className="text-gray-500 mb-6">Untuk bertanda <span className="text-red-500">*</span> wajib diisi!</p>
                 <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
@@ -694,7 +492,7 @@ const handleFinalSubmit = async () => {
                       type="email"
                       value={formData.email}
                       onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                      className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+                      className="w-full rounded-lg border border-gray-300 px-4 py-2 min-h-11 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
                       required
                     />
                   </div>
@@ -727,6 +525,7 @@ const handleFinalSubmit = async () => {
                       styles={{
                         control: (base, state) => ({
                           ...base,
+                          minHeight: 44,
                           borderColor: state.isFocused ? '#f97316' : base.borderColor, // orange-500 saat focus
                           boxShadow: state.isFocused ? '0 0 0 3px rgba(249, 115, 22, 0.5)' : base.boxShadow,
                           '&:hover': {
@@ -764,7 +563,7 @@ const handleFinalSubmit = async () => {
                         onChange={(e) =>
                           setFormData({ ...formData, rangeRent: Number(e.target.value) })
                         }
-                        className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+                        className="w-full rounded-lg border border-gray-300 px-4 py-2 min-h-11 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
                         placeholder={`Contoh: 3 ${formData.rentalDuration === 'daily' ? 'hari' : 'bulan'}`}
                         required
                       />
@@ -792,6 +591,7 @@ const handleFinalSubmit = async () => {
                       styles={{
                         control: (base, state) => ({
                           ...base,
+                          minHeight: 44,
                           borderColor: state.isFocused ? '#f97316' : base.borderColor, // orange-500 saat focus
                           boxShadow: state.isFocused ? '0 0 0 3px rgba(249, 115, 22, 0.5)' : base.boxShadow, // ring effect
                           '&:hover': {
@@ -817,7 +617,7 @@ const handleFinalSubmit = async () => {
                     />
                   </div>
 
-                  <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Deposit</label>
                       <div className="relative">
@@ -830,7 +630,7 @@ const handleFinalSubmit = async () => {
                             const raw = e.target.value.replace(/[^0-9]/g, '');
                             setFormData({ ...formData, deposit: parseInt(raw || '0') });
                           }}
-                          className="w-full rounded-lg border border-gray-300 pl-10 pr-4 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+                          className="w-full rounded-lg border border-gray-300 pl-10 pr-4 py-2 min-h-11 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
                           placeholder="Contoh: 100,000"
                         />
                       </div>
@@ -859,7 +659,7 @@ const handleFinalSubmit = async () => {
                             discount: parseInt(raw || '0'),
                           });
                         }}
-                        className="w-full rounded-lg border border-gray-300 pl-10 pr-20 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+                        className="w-full rounded-lg border border-gray-300 pl-10 pr-20 py-2 min-h-11 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
                         placeholder="Contoh: 25.000"
                       />
                       <span className="absolute right-3 inset-y-0 flex items-center text-sm text-orange-700 font-semibold">
@@ -882,7 +682,7 @@ const handleFinalSubmit = async () => {
                       type="date"
                       value={formData.startDate}
                       onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
-                      className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500 text-selection-safe"
+                      className="w-full rounded-lg border border-gray-300 px-4 py-2 min-h-11 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500 text-selection-safe"
                       required
                     />
                   </div>
@@ -895,7 +695,7 @@ const handleFinalSubmit = async () => {
                       type="date"
                       value={formData.endDate}
                       readOnly
-                      className="w-full rounded-lg border border-gray-300 bg-gray-100 px-4 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500 text-selection-safe"
+                      className="w-full rounded-lg border border-gray-300 bg-gray-100 px-4 py-2 min-h-11 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500 text-selection-safe"
                       required
                     />
                   </div>
@@ -908,64 +708,28 @@ const handleFinalSubmit = async () => {
                       type="time"
                       value={formData.startTime}
                       onChange={(e) => setFormData({ ...formData, startTime: e.target.value })}
-                      className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+                      className="w-full rounded-lg border border-gray-300 px-4 py-2 min-h-11 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
                     />
                   </div>
 
-                  <div className="flex space-x-6">
-                      <div className="flex items-center">
-                      <input
-                        type="checkbox"
-                        id="needsTrip"
-                        checked={formData.needsTrip}
-                        onChange={(e) => setFormData({ ...formData, needsTrip: e.target.checked })}
-                        className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                      />
-                      <label htmlFor="needsTrip" className="ml-2 text-sm text-gray-700">
-                        Biaya Luar Kota
+                  {/* The whole label is the tap target, so each option reaches 44px on a phone. */}
+                  <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:gap-6">
+                    {SERVICE_OPTIONS.map(({ key, label }) => (
+                      <label key={key} className="flex min-h-11 items-center gap-2 text-sm text-gray-700">
+                        <input
+                          type="checkbox"
+                          id={key}
+                          checked={formData[key]}
+                          onChange={(e) => setFormData({ ...formData, [key]: e.target.checked })}
+                          className="h-5 w-5 shrink-0 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                        />
+                        {label}
                       </label>
-                    </div>
-                    <div className="flex items-center">
-                      <input
-                        type="checkbox"
-                        id="needsDriver"
-                        checked={formData.needsDriver}
-                        onChange={(e) => setFormData({ ...formData, needsDriver: e.target.checked })}
-                        className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                      />
-                      <label htmlFor="needsDriver" className="ml-2 text-sm text-gray-700">
-                        Butuh Supir
-                      </label>
-                    </div>
-                    <div className="flex items-center">
-                      <input
-                        type="checkbox"
-                        id="needsDelivery"
-                        checked={formData.needsDelivery}
-                        onChange={(e) => setFormData({ ...formData, needsDelivery: e.target.checked })}
-                        className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                      />
-                      <label htmlFor="needsDelivery" className="ml-2 text-sm text-gray-700">
-                        Butuh Antar
-                      </label>
-                    </div>
-
-                    <div className="flex items-center">
-                    <input
-                      type="checkbox"
-                      id="needsPickup"
-                      checked={formData.needsPickup}
-                      onChange={(e) => setFormData({ ...formData, needsPickup: e.target.checked })}
-                      className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                    />
-                    <label htmlFor="needsPickup" className="ml-2 text-sm text-gray-700">
-                      Butuh Jemput
-                    </label>
-                  </div>
+                    ))}
                   </div>
 
                   {(formData.needsTrip || formData.needsDelivery || formData.needsPickup || formData.needsDriver) && (
-                    <div className="flex gap-4 col-span-2">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:col-span-2">
                         {formData.needsTrip && (
                         <div className="flex-1">
                             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -990,7 +754,7 @@ const handleFinalSubmit = async () => {
                                     tripFee: parseInt(raw || '0'),
                                   });
                                 }}
-                                className="w-full rounded-lg border border-gray-300 pl-10 pr-4 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+                                className="w-full rounded-lg border border-gray-300 pl-10 pr-4 py-2 min-h-11 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
                                 placeholder="Contoh: 50,000"
                               />
                             </div>
@@ -1021,7 +785,7 @@ const handleFinalSubmit = async () => {
                                     driverFee: parseInt(raw || '0'),
                                   });
                                 }}
-                                className="w-full rounded-lg border border-gray-300 pl-10 pr-4 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+                                className="w-full rounded-lg border border-gray-300 pl-10 pr-4 py-2 min-h-11 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
                                 placeholder="Contoh: 50,000"
                               />
                             </div>
@@ -1054,6 +818,7 @@ const handleFinalSubmit = async () => {
                             styles={{
                               control: (base, state) => ({
                                 ...base,
+                                minHeight: 44,
                                 borderColor: state.isFocused ? '#f97316' : base.borderColor,
                                 boxShadow: state.isFocused ? '0 0 0 3px rgba(249, 115, 22, 0.5)' : base.boxShadow,
                                 '&:hover': {
@@ -1106,6 +871,7 @@ const handleFinalSubmit = async () => {
                             styles={{
                               control: (base, state) => ({
                                 ...base,
+                                minHeight: 44,
                                 borderColor: state.isFocused ? '#f97316' : base.borderColor,
                                 boxShadow: state.isFocused ? '0 0 0 3px rgba(249, 115, 22, 0.5)' : base.boxShadow,
                                 '&:hover': {
@@ -1136,20 +902,20 @@ const handleFinalSubmit = async () => {
                   )}
 
 
-                  <div className="col-span-2">
+                  <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Tujuan Sewa <span className="text-red-500">*</span>
                     </label>
                     <textarea
                       value={formData.purpose}
                       onChange={(e) => setFormData({ ...formData, purpose: e.target.value })}
-                      className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+                      className="w-full rounded-lg border border-gray-300 px-4 py-2 min-h-11 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
                       rows={3}
                       required
                     />
                   </div>
 
-                  <div className="col-span-2">
+                  <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Tipe Identitas <span className="text-red-500">*</span>
                     </label>
@@ -1187,6 +953,7 @@ const handleFinalSubmit = async () => {
                       styles={{
                         control: (base, state) => ({
                           ...base,
+                          minHeight: 44,
                           borderColor: state.isFocused ? '#f97316' : base.borderColor,
                           boxShadow: state.isFocused ? '0 0 0 3px rgba(249, 115, 22, 0.5)' : base.boxShadow,
                           '&:hover': {
@@ -1212,7 +979,7 @@ const handleFinalSubmit = async () => {
                     />
                   </div>
 
-                  <div className="col-span-2">
+                  <div className="md:col-span-2">
                   {estimate && (
                     <div className="mt-6 p-4 border border-orange-200 bg-orange-50 rounded-xl w-full">
                       <p className="text-base font-bold text-gray-900 mb-2">Kisaran Harga</p>
@@ -1221,10 +988,10 @@ const handleFinalSubmit = async () => {
                   )}
                   </div>
                   
-                  <div className="col-span-2">
+                  <div className="md:col-span-2">
                     <button
                       type="submit"
-                      className="w-full px-5 py-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold rounded-xl shadow-md hover:from-orange-600 hover:to-yellow-600"
+                      className="w-full min-h-11 px-5 py-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold rounded-xl shadow-md hover:from-orange-600 hover:to-yellow-600"
                       >
                       Lanjut
                     </button>
@@ -1245,21 +1012,22 @@ const handleFinalSubmit = async () => {
                 isSubmitting={isSubmitting}
               />
             ) : (
-              <div className="bg-white rounded-xl shadow-lg p-8">
+              <div className="bg-white rounded-xl shadow-lg p-4 sm:p-8">
                 <form onSubmit={handleIdentityFormSubmit}>
                   {existingNotice && <div className="mb-6">{existingNotice}</div>}
                   {renderIdentityForm()}
-                  <div className="mt-6 flex space-x-4">
+                  {/* Reversed on mobile so the primary action sits first, under the thumb after scrolling. */}
+                  <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:gap-4">
                     <button
                       type="button"
                       onClick={() => setShowIdentityForm(false)}
-                      className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500"
+                      className="flex-1 min-h-11 py-2 px-4 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500"
                     >
                       Kembali
                     </button>
                     <button
                       type="submit"
-                      className="flex-1 px-5 py-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold rounded-xl shadow-md hover:from-orange-600 hover:to-yellow-600"
+                      className="flex-1 min-h-11 px-5 py-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold rounded-xl shadow-md hover:from-orange-600 hover:to-yellow-600"
                     >
                       Lanjut
                     </button>

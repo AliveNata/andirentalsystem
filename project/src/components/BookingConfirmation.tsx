@@ -128,9 +128,9 @@ useEffect(() => {
     .map(([key, value]) => ({ label: DOCUMENT_LABELS[key] || key, file: value as File }));
 
   return (
-    <div className="bg-white rounded-xl shadow-lg p-8">
+    <div className="bg-white rounded-xl shadow-lg p-4 sm:p-8">
       <div className="text-center mb-8">
-        <h2 className="text-2xl font-bold text-gray-900">Konfirmasi Booking</h2>
+        <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Konfirmasi Booking</h2>
         <div className="mt-4">
           <p className="text-sm text-gray-600">Kode Booking</p>
           <p className="mt-1 text-sm text-gray-700">Kode booking dibuat saat booking disimpan.</p>
@@ -147,7 +147,7 @@ useEffect(() => {
       </div>
 
       <div className="space-y-6">
-        <div className="bg-orange-50 p-6 rounded-lg">
+        <div className="bg-orange-50 p-4 sm:p-6 rounded-lg">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Detail Penyewaan</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -220,7 +220,7 @@ useEffect(() => {
           </div>
         </div>
 
-        <div className="bg-gray-50 p-6 rounded-lg">
+        <div className="bg-gray-50 p-4 sm:p-6 rounded-lg">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Data Penyewa</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -276,12 +276,12 @@ useEffect(() => {
         </div>
       </div>
 
-      <div className="mt-8 flex space-x-4">
+      <div className="mt-8 flex flex-col-reverse gap-3 sm:flex-row sm:gap-4">
         <button
           type="button"
           onClick={onBack}
           disabled={isSubmitting}
-          className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 disabled:opacity-60 disabled:cursor-not-allowed"
+          className="flex-1 min-h-11 py-2 px-4 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 disabled:opacity-60 disabled:cursor-not-allowed"
         >
           Kembali
         </button>
@@ -290,7 +290,7 @@ useEffect(() => {
           onClick={onSubmit}
           disabled={isSubmitting || !estimate}
           aria-busy={isSubmitting}
-          className="flex-1 px-5 py-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold rounded-xl shadow-md hover:from-orange-600 hover:to-yellow-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 disabled:opacity-60 disabled:cursor-not-allowed"
+          className="flex-1 min-h-11 px-5 py-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold rounded-xl shadow-md hover:from-orange-600 hover:to-yellow-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {isSubmitting ? 'Menyimpan booking...' : 'Simpan Booking'}
         </button>

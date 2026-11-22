@@ -49,7 +49,7 @@ const FileInput: React.FC<FileInputProps> = ({ label, onChange, required = true 
   };
 
   return (
-    <div className="col-span-2">
+    <div className="md:col-span-2">
       <label className="block text-sm font-medium text-gray-700 mb-1">
         {label} {required && <span className="text-red-500">*</span>}
       </label>
@@ -57,7 +57,7 @@ const FileInput: React.FC<FileInputProps> = ({ label, onChange, required = true 
         <input
           type="file"
           onChange={handleFileChange}
-          className={`w-full rounded-lg border px-4 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500 ${
+          className={`w-full rounded-lg border px-4 py-2 min-h-11 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500 ${
             errorMessage ? 'border-red-500' : 'border-gray-300'
           }`}
           required={required}
@@ -83,7 +83,7 @@ interface CommonFormProps<T> {
 
 const CommonForm = <T,>({ title, data, onChange, children }: CommonFormProps<T>) => (
   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-    <h3 className="col-span-2 text-xl font-semibold">{title}</h3>
+    <h3 className="md:col-span-2 text-lg sm:text-xl font-semibold">{title}</h3>
     <div>
       <label className="block text-sm font-medium text-gray-700 mb-1">
         Nama Anda <span className="text-red-500">*</span>
@@ -95,7 +95,7 @@ const CommonForm = <T,>({ title, data, onChange, children }: CommonFormProps<T>)
           console.log('SET name:', e.target.value);
           onChange({ ...data, name: e.target.value });
         }}
-        className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+        className="w-full rounded-lg border border-gray-300 px-4 py-2 min-h-11 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
         required
       />
     </div>
@@ -113,9 +113,9 @@ const CommonForm = <T,>({ title, data, onChange, children }: CommonFormProps<T>)
         enableAreaCodes
         enableSearch
         placeholder="8123456789"
-        inputClass="!w-full !rounded-lg !py-2.5 !px-4 !pl-14 !text-sm !border !border-gray-300 !h-[42px] !leading-5"
-        containerClass="!w-full !h-[42px]"
-        buttonClass="!bg-white border-r border-gray-300 !h-[42px]"
+        inputClass="!w-full !rounded-lg !py-2.5 !px-4 !pl-14 !text-sm !border !border-gray-300 !h-11 !leading-5"
+        containerClass="!w-full !h-11"
+        buttonClass="!bg-white border-r border-gray-300 !h-11"
         inputProps={{
           name: 'whatsapp',
           required: true,
@@ -123,7 +123,7 @@ const CommonForm = <T,>({ title, data, onChange, children }: CommonFormProps<T>)
         }}
       />
     </div>
-    <div className="col-span-2">
+    <div className="md:col-span-2">
       <label className="block text-sm font-medium text-gray-700 mb-1">
         Alamat Tempat Tinggal Anda <span className="text-red-500">*</span>
       </label>
@@ -133,7 +133,7 @@ const CommonForm = <T,>({ title, data, onChange, children }: CommonFormProps<T>)
           console.log('SET address:', e.target.value);
           onChange({ ...data, address: e.target.value });
         }}
-        className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+        className="w-full rounded-lg border border-gray-300 px-4 py-2 min-h-11 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
         rows={3}
         required
       />
@@ -179,14 +179,14 @@ export const CorporateForm: React.FC<{ data: CorporateCustomerForm; onChange: (d
   <CommonForm title="Formulir Khusus Pemesanan Operasional Perusahaan" data={data} onChange={onChange}>
     <FileInput label="Upload KTP Anda" onChange={(file) => onChange({ ...data, ktpFile: file })} />
     <FileInput label="Upload SIM A Anda" onChange={(file) => onChange({ ...data, simFile: file })} required={false} />
-    <div className="col-span-2">
+    <div className="md:col-span-2">
       <label className="block text-sm font-medium text-gray-700 mb-1">
         Alamat Tempat Tinggal Perusahaan <span className="text-red-500">*</span>
       </label>
       <textarea
         value={data.companyAddress}
         onChange={(e) => onChange({ ...data, companyAddress: e.target.value })}
-        className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+        className="w-full rounded-lg border border-gray-300 px-4 py-2 min-h-11 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
         rows={3}
         required
       />

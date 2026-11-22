@@ -5,6 +5,9 @@ import 'react-datepicker/dist/react-datepicker.css';
 // Export only. xlsx 0.18.5 has unfixed parse-side advisories (GHSA-4r6h-8v6p-xvw6 prototype
 // pollution, GHSA-5pgg-2g8v-p4x9 ReDoS): never call XLSX.read or sheet_to_* on a user-supplied file.
 import * as XLSX from 'xlsx';
+import Pagination from './ui/Pagination';
+import { ScrollableTable, TABLE_HEAD_CLASS, TableMessageRow, Th } from './ui/DataTable';
+import { usePagination } from '../lib/usePagination';
 
 interface LogItem {
   id: string;
@@ -29,11 +32,24 @@ const renderKeyValueIndented =(obj: Record<string, any>) => {
   ));
 };
 
+// Same format in the table and the Excel export.
+const formatLogDate = (value: string) =>
+  new Date(value).toLocaleString('en-GB', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  }).replace(' at', ',').replace('am', 'AM').replace('pm', 'PM');
+
+const itemsPerPage = 10;
+
 const ActivityLog: React.FC = () => {
   const [logs, setLogs] = useState<LogItem[]>([]);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [searchTerm, setSearchTerm] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
 
   const [startDate, setStartDate] = useState<Date | null>(null);
   const [endDate, setEndDate] = useState<Date | null>(null);
@@ -44,8 +60,14 @@ const ActivityLog: React.FC = () => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
-      .then((data) => setLogs(data))
-      .catch((err) => console.error('Error fetching logs:', err));
+      .then((data) => {
+        setLogs(data);
+        setStatus('ready');
+      })
+      .catch((err) => {
+        console.error('Error fetching logs:', err);
+        setStatus('error');
+      });
   }, []);
 
   const filteredLogs = logs.filter((log) => {
@@ -67,15 +89,7 @@ const ActivityLog: React.FC = () => {
 
 const handleExport = () => {
   const exportData = filteredLogs.map((log) => ({
-    Tanggal: new Date(log.created_at).toLocaleString('en-GB', {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: true
-    }).replace(' at', ',').replace('am', 'AM').replace('pm', 'PM'),
+    Tanggal: formatLogDate(log.created_at),
     Entitas: log.entity,
     Aksi: log.action,
     Halaman: log.page,
@@ -91,209 +105,129 @@ const handleExport = () => {
   XLSX.writeFile(workbook, filename);
 };
 
-  const paginatedLogs = filteredLogs.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
+
+  const { page, setPage, totalPages, pageItems: paginatedLogs, startIndex } = usePagination(
+    filteredLogs,
+    itemsPerPage,
+    `${searchTerm}|${startDate?.getTime() ?? ''}|${endDate?.getTime() ?? ''}`,
   );
 
-  const totalPages = Math.ceil(filteredLogs.length / itemsPerPage);
-
   return (
-    <div className="p-6">
-      <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
-        <h2 className="text-2xl font-semibold">Aktifitas Log</h2>
-        <div className="flex flex-wrap items-center gap-2">
+    <div className="sm:p-6">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <h2 className="text-xl sm:text-2xl font-semibold">Aktifitas Log</h2>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:gap-3">
             <DatePicker
-            selected={startDate}
-            onChange={(date) => {
-                setStartDate(date);
-                setCurrentPage(1);
-            }}
-            selectsStart
-            startDate={startDate}
-            endDate={endDate}
-            placeholderText="Dari tanggal"
-            className="px-3 py-2 border rounded-md text-sm"
+              selected={startDate}
+              onChange={(date) => setStartDate(date)}
+              selectsStart
+              startDate={startDate}
+              endDate={endDate}
+              placeholderText="Dari tanggal"
+              wrapperClassName="w-full sm:w-auto"
+              className="h-11 w-full text-base sm:h-10 sm:w-40 sm:text-sm px-3 border rounded-md"
             />
             <DatePicker
-            selected={endDate}
-            onChange={(date) => {
-                setEndDate(date);
-                setCurrentPage(1);
-            }}
-            selectsEnd
-            startDate={startDate}
-            endDate={endDate}
-            placeholderText="Sampai tanggal"
-            className="px-3 py-2 border rounded-md text-sm"
+              selected={endDate}
+              onChange={(date) => setEndDate(date)}
+              selectsEnd
+              startDate={startDate}
+              endDate={endDate}
+              placeholderText="Sampai tanggal"
+              wrapperClassName="w-full sm:w-auto"
+              className="h-11 w-full text-base sm:h-10 sm:w-40 sm:text-sm px-3 border rounded-md"
             />
-            <div className="relative w-72">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+          </div>
+          <div className="relative w-full sm:w-72">
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} aria-hidden="true" />
             <input
-                type="text"
-                placeholder="Cari entity, action, page, user_id..."
-                value={searchTerm}
-                onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setCurrentPage(1);
-                }}
-                className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg w-full focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+              type="search"
+              aria-label="Cari entity, action, page, user_id..."
+              placeholder="Cari entity, action, page, user_id..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="h-11 w-full text-base sm:h-10 pl-10 pr-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
             />
-            </div>
-            <button
+          </div>
+          <button
             onClick={handleExport}
-            className="flex items-center space-x-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:from-orange-600 hover:to-yellow-600"
-            >
-            <FileDown size={20} /> 
+            className="inline-flex h-11 w-full items-center justify-center gap-2 sm:h-10 sm:w-auto bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:from-orange-600 hover:to-yellow-600"
+          >
+            <FileDown size={20} />
             <span>Download ke Excel</span>
-            </button>
+          </button>
         </div>
       </div>
 
-      <div className="overflow-x-auto bg-white rounded-lg shadow">
-        <table className="min-w-full text-sm text-gray-700">
-          <thead className="bg-gray-100 text-left">
+      <ScrollableTable label="Tabel aktifitas log">
+        <table className="min-w-full bg-white text-sm text-gray-700">
+          <thead className={TABLE_HEAD_CLASS}>
             <tr>
-              <th className="px-6 py-3">Tanggal</th>
-              <th className="px-6 py-3">Entitas</th>
-              <th className="px-6 py-3">Aksi</th>
-              <th className="px-6 py-3">Halaman</th>
-              <th className="px-6 py-3">Perubahan</th>
-              <th className="px-6 py-3">Username</th>
+              <Th>Tanggal</Th>
+              <Th>Entitas</Th>
+              <Th>Aksi</Th>
+              <Th>Halaman</Th>
+              <Th>Perubahan</Th>
+              <Th>Username</Th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-            {paginatedLogs.map((log) => (
-              <tr key={log.id} className="hover:bg-gray-50">
-                <td className="px-6 py-4 whitespace-nowrap">
-                  {new Date(log.created_at).toLocaleString('en-GB', {
-                    day: 'numeric',
-                    month: 'long',
-                    year: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    hour12: true
-                    }).replace(' at', ',').replace('am', 'AM').replace('pm', 'PM')}
-                    
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">{log.entity}</td>
-                <td className="px-6 py-4 whitespace-nowrap">{log.action}</td>
-                <td className="px-6 py-4 whitespace-nowrap">{log.page}</td>
-                <td className="px-6 py-4 whitespace-pre-wrap break-words max-w-xs text-xs text-gray-600">
-                {log.changes.before && (
-                <div>
-                    <div className="font-semibold">Sebelumnya:</div>
-                    <div className="text-sm">{renderKeyValueIndented(log.changes.before)}</div>
-                </div>
-                )}
-                {log.changes.after && (
-                <div className="mt-2">
-                    <div className="font-semibold">Setelahnya:</div>
-                    <div className="text-sm">{renderKeyValueIndented(log.changes.after)}</div>
-                </div>
-                )}
-                {!log.changes?.before && !log.changes?.after && log.changes?.reason && (
-                <div className="text-sm">
-                    <strong>Alasan:</strong> {log.changes.reason}
-                </div>
-                )}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap"><strong>{log.username}</strong></td>
-              </tr>
-            ))}
+            {status === 'loading' ? (
+              <TableMessageRow colSpan={6}>Memuat aktifitas log...</TableMessageRow>
+            ) : status === 'error' ? (
+              <TableMessageRow colSpan={6}>
+                Aktifitas log gagal dimuat. Muat ulang halaman untuk mencoba lagi.
+              </TableMessageRow>
+            ) : paginatedLogs.length === 0 ? (
+              <TableMessageRow colSpan={6}>
+                {searchTerm.trim() || startDate || endDate
+                  ? 'Tidak ada log yang cocok dengan pencarian atau rentang tanggal ini.'
+                  : 'Belum ada aktifitas yang tercatat.'}
+              </TableMessageRow>
+            ) : (
+              paginatedLogs.map((log) => (
+                <tr key={log.id} className="hover:bg-gray-50">
+                  <td className="px-6 py-4 whitespace-nowrap">{formatLogDate(log.created_at)}</td>
+                  <td className="px-6 py-4 whitespace-nowrap">{log.entity}</td>
+                  <td className="px-6 py-4 whitespace-nowrap">{log.action}</td>
+                  <td className="px-6 py-4 whitespace-nowrap">{log.page}</td>
+                  <td className="px-6 py-4 whitespace-pre-wrap break-words max-w-xs text-xs text-gray-600">
+                    {log.changes?.before && (
+                      <div>
+                        <div className="font-semibold">Sebelumnya:</div>
+                        <div className="text-sm">{renderKeyValueIndented(log.changes.before)}</div>
+                      </div>
+                    )}
+                    {log.changes?.after && (
+                      <div className="mt-2">
+                        <div className="font-semibold">Setelahnya:</div>
+                        <div className="text-sm">{renderKeyValueIndented(log.changes.after)}</div>
+                      </div>
+                    )}
+                    {!log.changes?.before && !log.changes?.after && log.changes?.reason && (
+                      <div className="text-sm">
+                        <strong>Alasan:</strong> {log.changes.reason}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap"><strong>{log.username}</strong></td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
-      </div>
+      </ScrollableTable>
 
-      {/* Pagination */}
-      <div className="flex justify-between items-center mt-4">
-  <p className="text-sm text-gray-600">
-    Menampilkan {paginatedLogs.length} dari {filteredLogs.length} data
-  </p>
-  <div className="flex space-x-1 flex-wrap">
-    {/* Tombol Previous */}
-    <button
-      onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
-      disabled={currentPage === 1}
-      className="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-50"
-    >
-      &laquo;
-    </button>
-
-    {/* Logic Page Numbers */}
-    {(() => {
-      const pages = [];
-
-      const showLeftEllipsis = currentPage > 6;
-      const showRightEllipsis = currentPage < totalPages - 5;
-
-      const startPage = showLeftEllipsis ? Math.max(currentPage - 4, 2) : 2;
-      const endPage = showRightEllipsis
-        ? Math.min(currentPage + 4, totalPages - 1)
-        : totalPages - 1;
-
-      // Always show page 1
-      pages.push(
-        <button
-          key={1}
-          onClick={() => setCurrentPage(1)}
-          className={`px-3 py-1 border rounded ${currentPage === 1 ? 'bg-orange-500 text-white' : 'hover:bg-gray-100'}`}
-        >
-          1
-        </button>
-      );
-
-      // Left ellipsis
-      if (showLeftEllipsis) {
-        pages.push(<span key="left-ellipsis" className="px-2">...</span>);
-      }
-
-      // Middle pages
-      for (let i = startPage; i <= endPage; i++) {
-        pages.push(
-          <button
-            key={i}
-            onClick={() => setCurrentPage(i)}
-            className={`px-3 py-1 border rounded ${currentPage === i ? 'bg-orange-500 text-white' : 'hover:bg-gray-100'}`}
-          >
-            {i}
-          </button>
-        );
-      }
-
-      // Right ellipsis
-      if (showRightEllipsis) {
-        pages.push(<span key="right-ellipsis" className="px-2">...</span>);
-      }
-
-      // Always show last page if more than 1
-      if (totalPages > 1) {
-        pages.push(
-          <button
-            key={totalPages}
-            onClick={() => setCurrentPage(totalPages)}
-            className={`px-3 py-1 border rounded ${currentPage === totalPages ? 'bg-orange-500 text-white' : 'hover:bg-gray-100'}`}
-          >
-            {totalPages}
-          </button>
-        );
-      }
-
-      return pages;
-    })()}
-
-    {/* Tombol Next */}
-    <button
-      onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
-      disabled={currentPage === totalPages}
-      className="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-50"
-    >
-      &raquo;
-    </button>
-  </div>
-</div>
-
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        totalItems={filteredLogs.length}
+        pageCount={paginatedLogs.length}
+        startIndex={startIndex}
+        onPageChange={setPage}
+        itemLabel="log"
+      />
     </div>
   );
 };

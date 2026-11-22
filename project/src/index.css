@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+/* The header is sticky (h-16), so focused elements must not scroll in underneath it. */
+html {
+  scroll-padding-top: 4rem;
+}
+
 .text-selection-safe {
   @apply text-gray-900 dark:text-black;
 }

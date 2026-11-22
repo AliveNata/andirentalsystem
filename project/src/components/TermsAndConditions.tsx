@@ -19,8 +19,8 @@ const TermsAndConditions: React.FC<TermsAndConditionsProps> = ({ onAccept, onBac
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-lg p-8">
-      <h2 className="text-2xl font-semibold mb-6">Syarat dan Ketentuan di Andi Rental Mobil</h2>
+    <div className="bg-white rounded-xl shadow-lg p-4 sm:p-8">
+      <h2 className="text-xl sm:text-2xl font-semibold mb-6">Syarat dan Ketentuan di Andi Rental Mobil</h2>
       <div 
         ref={termsRef}
         onScroll={handleScroll}
@@ -98,11 +98,11 @@ const TermsAndConditions: React.FC<TermsAndConditionsProps> = ({ onAccept, onBac
         </label>
       </div>
 
-      <div className="flex space-x-4">
+      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:gap-4">
         <button
           type="button"
           onClick={onBack}
-          className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500"
+          className="flex-1 min-h-11 py-2 px-4 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500"
         >
           Kembali
         </button>
@@ -110,7 +110,7 @@ const TermsAndConditions: React.FC<TermsAndConditionsProps> = ({ onAccept, onBac
           type="button"
           onClick={onAccept}
           disabled={!isChecked || !canAccept}
-          className="flex-1 py-2 px-4 border border-transparent rounded-lg text-white bg-orange-500 hover:bg-orange-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex-1 min-h-11 py-2 px-4 border border-transparent rounded-lg text-white bg-orange-500 hover:bg-orange-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Setuju & Lanjutkan
         </button>

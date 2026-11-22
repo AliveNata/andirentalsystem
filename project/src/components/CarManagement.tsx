@@ -125,23 +125,24 @@ const CarManagement = () => {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
 
   return (
-    <div className="p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-semibold">Manajemen Mobil</h2>
-        <div className="flex items-center space-x-4">
-          <div className="relative">
+    <div className="sm:p-6">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <h2 className="text-xl sm:text-2xl font-semibold">Manajemen Mobil</h2>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+          <div className="relative w-full sm:w-64">
             <input
-              type="text"
+              type="search"
+              aria-label="Cari nama, brand, dll..."
               placeholder="Cari nama, brand, dll..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg w-64 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+              className="h-11 w-full text-base sm:h-10 pl-10 pr-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
             />
-            <Search className="absolute left-3 top-2.5 text-gray-400" size={20} />
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} aria-hidden="true" />
           </div>
           <button
             onClick={() => setIsAddModalOpen(true)}
-            className="flex items-center space-x-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:from-orange-600 hover:to-yellow-600"
+            className="inline-flex h-11 w-full items-center justify-center gap-2 sm:h-10 sm:w-auto bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:from-orange-600 hover:to-yellow-600"
           >
             <Car size={20} />
             <span>Tambah Data Mobil</span>

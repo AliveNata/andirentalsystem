@@ -45,12 +45,19 @@ export const ScrollableTable: React.FC<ScrollableTableProps> = ({ label, childre
 
   return (
     <>
+      {/* Drag-scroll is mouse-only (useDragScroll), so the drag tip shows for a fine pointer and a
+          touch screen gets a one-line swipe hint instead. */}
       {canScrollX && (
-        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3">
-          <p className="text-sm text-blue-700">
-            💡 <strong>Tips:</strong> Klik dan seret area kosong tabel (seperti header atau cell kosong) untuk menggulir horizontal/vertikal. Hindari menyeret pada tombol, gambar, atau elemen interaktif.
+        <>
+          <div className="mb-4 hidden rounded-lg border border-blue-200 bg-blue-50 p-3 [@media(pointer:fine)]:block">
+            <p className="text-sm text-blue-700">
+              <strong>Tips:</strong> klik dan seret area kosong tabel untuk menggulir. Mulai seret dari header atau sel kosong, bukan dari tombol atau gambar.
+            </p>
+          </div>
+          <p className="mb-2 text-xs text-gray-600 [@media(pointer:fine)]:hidden">
+            Geser tabel ke samping untuk melihat kolom lain.
           </p>
-        </div>
+        </>
       )}
       <div
         ref={ref}
@@ -59,7 +66,7 @@ export const ScrollableTable: React.FC<ScrollableTableProps> = ({ label, childre
         // Focusable only when there is something to scroll, so arrow keys can move a wide table.
         tabIndex={scrollable ? 0 : undefined}
         className={cn(
-          'max-h-[70vh] overflow-auto rounded-lg border border-gray-200 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-700 focus-visible:ring-offset-2',
+          'max-h-[70dvh] overflow-auto rounded-lg [container-type:inline-size] border border-gray-200 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-700 focus-visible:ring-offset-2',
           scrollable && 'cursor-grab',
         )}
       >
@@ -74,10 +81,13 @@ interface TableMessageRowProps {
   children: React.ReactNode;
 }
 
+// In a 1500px table the cell spans the full table, so a centred message sat off-screen on a phone.
+// The inner box sticks to the left edge and is as wide as the visible region (100cqw, the region
+// is the query container), so the text stays centred in what the user can see.
 export const TableMessageRow: React.FC<TableMessageRowProps> = ({ colSpan, children }) => (
   <tr>
-    <td colSpan={colSpan} className="px-6 py-8 text-center text-sm text-gray-600">
-      {children}
+    <td colSpan={colSpan} className="p-0">
+      <div className="sticky left-0 w-[100cqw] px-6 py-8 text-center text-sm text-gray-600">{children}</div>
     </td>
   </tr>
 );

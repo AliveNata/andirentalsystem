@@ -244,10 +244,10 @@ const handleSaveLoyaltySettings = async () => {
 
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="bg-gray-50 sm:p-6">
       <div className="max-w-4xl mx-auto">
         {/* Header */}
-        <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
+        <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6 mb-6 sm:mb-8">
           <div className="flex items-center gap-3">
             <div className="p-3 bg-blue-100 rounded-lg">
               <SettingsIcon className="w-6 h-6 text-blue-600" />
@@ -260,8 +260,8 @@ const handleSaveLoyaltySettings = async () => {
         </div>
 
         {/* Bank Account Section */}
-        <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
-          <div className="flex items-center justify-between mb-6">
+        <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6 mb-6 sm:mb-8">
+          <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-green-100 rounded-lg">
                 <CreditCard className="w-5 h-5 text-green-600" />
@@ -273,7 +273,7 @@ const handleSaveLoyaltySettings = async () => {
             </div>
             <button
               onClick={() => setShowAddForm(true)}
-              className="flex items-center space-x-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:from-orange-600 hover:to-yellow-600"
+              className="inline-flex h-11 w-full shrink-0 items-center justify-center gap-2 sm:w-auto bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:from-orange-600 hover:to-yellow-600"
             >
               <Plus className="w-4 h-4" />
               Tambah Rekening
@@ -285,7 +285,7 @@ const handleSaveLoyaltySettings = async () => {
 
           {/* Bank Account Form */}
           {showAddForm && (
-            <div className="border border-gray-200 rounded-lg p-6 mb-6 bg-gray-50">
+            <div className="border border-gray-200 rounded-lg p-4 sm:p-6 mb-6 bg-gray-50">
               <h3 className="text-lg font-semibold mb-4">
                 {editingAccount ? 'Edit Rekening Bank' : 'Tambah Rekening Bank'}
               </h3>
@@ -348,11 +348,11 @@ const handleSaveLoyaltySettings = async () => {
                     />
                   </div>
                 </div>
-                <div className="flex gap-3 pt-4">
+                <div className="flex flex-col-reverse gap-3 pt-4 sm:flex-row">
                   <button
                     type="button"
                     onClick={resetForm}
-                    className="bg-gray-500 text-white px-6 py-2 rounded-lg hover:bg-gray-600 transition-colors"
+                    className="h-11 w-full sm:w-auto bg-gray-500 text-white px-6 py-2 rounded-lg hover:bg-gray-600 transition-colors"
                   >
                     Batal
                   </button>
@@ -360,33 +360,12 @@ const handleSaveLoyaltySettings = async () => {
                     type="submit"
                     disabled={isSavingBank}
                     aria-busy={isSavingBank || undefined}
-                    className="bg-orange-600 text-white px-6 py-2 rounded-lg hover:bg-orange-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                    className="h-11 w-full sm:w-auto bg-orange-600 text-white px-6 py-2 rounded-lg hover:bg-orange-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {isSavingBank ? 'Menyimpan...' : editingAccount ? 'Update Rekening' : 'Simpan Rekening'}
                   </button>
                 </div>
               </form>
-
-                  {bankAccounts.map((account) => (
-                    
-                  <div key={account.id} className="flex items-center gap-3 p-4 border rounded-lg mb-4">
-                    <img
-              src={account.logoUrl || '/default-bank-icon.png'}
-              alt={account.bankName}
-              className="w-full h-full object-contain"
-              onError={(e) => {
-                e.currentTarget.src = '/default-bank-icon.png';
-                e.currentTarget.onerror = null;
-              }}
-            />
-        <div>
-          <div className="font-semibold">{account.bankName}</div>
-          <div className="text-sm">{account.accountNumber}</div>
-          <div className="text-sm text-gray-600">{account.accountHolderName}</div>
-        </div>
-      </div>
-    ))}
-
             </div>
           )}
 
@@ -403,9 +382,9 @@ const handleSaveLoyaltySettings = async () => {
                   key={account.id}
                   className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className="w-16 h-16 bg-gray-100 rounded-lg overflow-hidden">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 flex-1 items-center gap-4">
+                      <div className="w-16 h-16 shrink-0 bg-gray-100 rounded-lg overflow-hidden">
                         <img
                           src={account.logoUrl}
                           alt={account.bankName}
@@ -419,24 +398,24 @@ const handleSaveLoyaltySettings = async () => {
                           <CreditCard className="w-8 h-8 text-gray-400" />
                         </div>
                       </div>
-                      <div>
+                      <div className="min-w-0 [overflow-wrap:anywhere]">
                         <h4 className="font-semibold text-gray-900">{account.bankName}</h4>
                         <p className="text-gray-600">{account.accountNumber}</p>
                         <p className="text-sm text-gray-500">{account.accountHolderName}</p>
                       </div>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex shrink-0 gap-2">
                       <button
                         onClick={() => handleEdit(account)}
                         aria-label={`Ubah rekening ${account.bankName}`}
-                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        className="inline-flex h-11 w-11 items-center justify-center text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                       >
                         <Edit className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => setBankToDelete(account)}
                         aria-label={`Hapus rekening ${account.bankName}`}
-                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        className="inline-flex h-11 w-11 items-center justify-center text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -452,7 +431,7 @@ const handleSaveLoyaltySettings = async () => {
         <WebConfigSettings />
 
         {/* Loyalty Points Section */}
-        <div className="bg-white rounded-xl shadow-sm p-6">
+        <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6">
           <div className="flex items-center gap-3 mb-6">
             <div className="p-2 bg-purple-100 rounded-lg">
               <Star className="w-5 h-5 text-purple-600" />
@@ -579,7 +558,7 @@ const handleSaveLoyaltySettings = async () => {
           <div className="mt-4 text-right">
             <button
               onClick={handleSaveLoyaltySettings}
-              className="bg-orange-600 text-white pflex items-center space-x-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:from-orange-600 hover:to-yellow-600"
+              className="inline-flex min-h-11 w-full items-center justify-center sm:min-h-0 sm:w-auto bg-orange-600 text-white bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:from-orange-600 hover:to-yellow-600"
             >
               Simpan Pengaturan Loyalty
             </button>

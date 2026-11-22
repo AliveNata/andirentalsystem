@@ -268,7 +268,7 @@ const CarFormModal: React.FC<CarFormModalProps> = ({ isOpen, onClose, onSuccess,
             </div>
 
             {carColors.map((_, index) => (
-              <div key={index} className="grid grid-cols-2 gap-3">
+              <div key={index} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label className="block text-sm font-medium mb-1">Warna Mobil {index + 1}</label>
                   <input
