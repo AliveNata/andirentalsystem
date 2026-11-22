@@ -7,6 +7,8 @@ import { toast } from 'react-hot-toast';
 import { FORBIDDEN_EVENT, SESSION_EXPIRED_EVENT, type ForbiddenDetail } from './lib/sessionGuard';
 import { GUARD_TOAST_ID } from './lib/notify';
 import { Modal, ModalButton } from './components/ui/Modal';
+import AccountMenu from './components/AccountMenu';
+import { DESKTOP_QUERY, useMediaQuery } from './lib/useMediaQuery';
 
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
@@ -17,10 +19,23 @@ function App() {
   });
 
   const [showChangelog, setShowChangelog] = useState(false);  
+  // Desktop (lg and up) inline sidebar. Below lg the menu lives in a drawer that starts closed.
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const isDesktop = useMediaQuery(DESKTOP_QUERY);
   const [isAppMounted, setIsAppMounted] = useState(false);
   const [showWarning, setShowWarning] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
+
+  // Widening past lg while the drawer is open would leave a focus trap over the inline sidebar.
+  useEffect(() => {
+    if (isDesktop) setIsMobileNavOpen(false);
+  }, [isDesktop]);
+
+  const toggleNav = () => {
+    if (isDesktop) setIsSidebarOpen((v) => !v);
+    else setIsMobileNavOpen(true);
+  };
 
   useEffect(() => {
     if (darkMode) {
@@ -171,74 +186,56 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100">
+    <div className="flex min-h-dvh flex-col bg-gray-100">
       {showWarning && (
-        <div className="fixed top-4 right-4 bg-yellow-300 text-black px-4 py-2 rounded shadow-md z-50">
+        <div className="fixed top-4 left-4 right-4 bg-yellow-300 text-black px-4 py-2 rounded shadow-md z-50 sm:left-auto">
           Kamu akan logout dalam 1 menit karena tidak aktif
         </div>
       )}
 
-      <nav className="bg-white dark:bg-gray-800 shadow-md">
-  <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-    <div className="flex justify-between h-16 items-center">
-      {/* Kiri: Sidebar toggle + Judul */}
-      <div className="flex items-center">
-        <button
-          onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-          className="text-gray-500 dark:text-gray-300 hover:text-gray-700"
-        >
-          {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
-        </button>
-        <h1 className="ml-4 text-xl font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-2">
-          <span>Andi Rental Mobil System</span>
-          <button
-            onClick={() => setShowChangelog(true)}
-            className="text-xs font-normal text-gray-500 dark:text-gray-400 underline hover:text-gray-700 dark:hover:text-gray-200"
-          >
-            v1.0.0
-          </button>
-        </h1>
-      </div>
+      {/* Sticky so the menu button stays in reach while a long page scrolls on a phone. */}
+      <nav className="sticky top-0 z-40 bg-white dark:bg-gray-800 shadow-md">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between gap-2 h-16 items-center">
+            <div className="flex min-w-0 flex-1 items-center">
+              <button
+                id="nav-toggle"
+                type="button"
+                onClick={toggleNav}
+                aria-expanded={isDesktop ? isSidebarOpen : isMobileNavOpen}
+                aria-controls={isDesktop ? undefined : 'mobile-nav'}
+                aria-label={isDesktop ? (isSidebarOpen ? 'Sembunyikan menu' : 'Tampilkan menu') : 'Buka menu'}
+                className="-ml-2 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-gray-500 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-700 dark:text-gray-300"
+              >
+                {isDesktop && isSidebarOpen ? <X size={24} aria-hidden="true" /> : <Menu size={24} aria-hidden="true" />}
+              </button>
+              <h1 className="ml-2 flex min-w-0 items-center gap-2 font-semibold text-gray-800 dark:text-gray-100 sm:ml-4">
+                <span className="truncate text-base sm:text-xl">Andi Rental Mobil System</span>
+                <button
+                  type="button"
+                  onClick={() => setShowChangelog(true)}
+                  className="hidden shrink-0 text-xs font-normal text-gray-500 underline hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 sm:inline"
+                >
+                  v1.0.0
+                </button>
+              </h1>
+            </div>
 
-      {/* Kanan: Username dropdown */}
-      <div className="relative group">
-        <button className="flex items-center space-x-2 focus:outline-none text-gray-700 dark:text-gray-200">
-          <span className="mr-2">{auth.username}</span>
-          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-            <path d="M5.5 7l4.5 4.5L14.5 7z" />
-          </svg>
-        </button>
-        <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-700 border dark:border-gray-600 rounded-md shadow-md opacity-0 group-hover:opacity-100 transition duration-150 z-50 p-3 space-y-2">
-          <div className="flex items-center justify-between">
-  <span className="text-sm text-gray-700 dark:text-gray-200">
-    {darkMode ? 'Mode Gelap' : 'Mode Terang'}
-  </span>
-  <button
-    onClick={() => setDarkMode(!darkMode)}
-    className={`w-10 h-5 flex items-center bg-gray-300 rounded-full p-1 duration-300 ease-in-out ${
-      darkMode ? 'bg-orange-500' : ''
-    }`}
-  >
-    <div
-      className={`bg-white w-4 h-4 rounded-full shadow-md transform duration-300 ease-in-out ${
-        darkMode ? 'translate-x-5' : ''
-      }`}
-    />
-  </button>
-</div>
-          <button
-            onClick={() => { void logout(); }}
-            className="w-full bg-red-500 text-white text-sm px-3 py-1 rounded hover:bg-red-600"
-          >
-            Logout
-          </button>
+            <AccountMenu
+              username={auth.username}
+              darkMode={darkMode}
+              onToggleDarkMode={() => setDarkMode((v) => !v)}
+              onLogout={() => { void logout(); }}
+            />
+          </div>
         </div>
-      </div>
-    </div>
-  </div>
-</nav>
+      </nav>
 
-      <Dashboard isSidebarOpen={isSidebarOpen} />
+      <Dashboard
+        isSidebarOpen={isSidebarOpen}
+        isMobileNavOpen={isMobileNavOpen}
+        onMobileNavChange={setIsMobileNavOpen}
+      />
 
       <Modal
         open={showChangelog}

@@ -335,7 +335,7 @@ const WebConfigSettings: React.FC = () => {
   );
 
   return (
-    <section aria-labelledby="web-config-title" className="bg-white rounded-xl shadow-sm p-6 mb-8">
+    <section aria-labelledby="web-config-title" className="bg-white rounded-xl shadow-sm p-4 sm:p-6 mb-6 sm:mb-8">
       <div className="flex items-center gap-3 mb-6">
         <div className="p-2 bg-pink-100 rounded-lg">
           <ImageIcon className="w-5 h-5 text-pink-600" aria-hidden="true" />

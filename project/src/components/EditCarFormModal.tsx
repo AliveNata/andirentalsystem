@@ -249,7 +249,7 @@ const EditCarFormModal: React.FC<EditCarFormModalProps> = ({
                    })}
 
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     {Array.from({ length: formData.quantity || 0 }).map((_, index) => (
                       <Fragment key={index}>
                         <div>

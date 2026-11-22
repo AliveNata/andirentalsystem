@@ -61,18 +61,19 @@ function LoyaltyCustomer() {
   );
 
   return (
-    <div className="p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-semibold">Loyalty Customer</h2>
-        <div className="relative">
+    <div className="sm:p-6">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <h2 className="text-xl sm:text-2xl font-semibold">Loyalty Customer</h2>
+        <div className="relative w-full sm:w-72 lg:w-96">
           <input
-            type="text"
+            type="search"
+            aria-label="Cari berdasarkan nama, email, atau whatsapp..."
             placeholder="Cari berdasarkan nama, email, atau whatsapp..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg w-96 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+            className="h-11 w-full text-base sm:h-10 pl-10 pr-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
           />
-          <Search className="absolute left-3 top-2.5 text-gray-400" size={20} />
+          <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} aria-hidden="true" />
         </div>
       </div>
 

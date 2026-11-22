@@ -450,47 +450,53 @@ const filteredTransactions = transactions.filter((trx) => {
   );
 
   return (
-    <div className="p-6">
+    <div className="sm:p-6">
       <div className="mb-6">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-2xl font-semibold">Data Transaksi</h2>
+          <h2 className="text-xl sm:text-2xl font-semibold">Data Transaksi</h2>
         </div>
 
-        <div className="flex justify-end items-center flex-wrap gap-4">
-          <DatePicker
-            selected={startDate}
-            onChange={(date) => setStartDate(date)}
-            selectsStart
-            startDate={startDate}
-            endDate={endDate}
-            placeholderText="Dari tanggal"
-            className="w-40 px-3 py-2 border border-gray-300 rounded-md text-sm"
-          />
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-4">
+          {/* Side by side even at 360px: two date fields fit in half the width each. */}
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:gap-4">
+            <DatePicker
+              selected={startDate}
+              onChange={(date) => setStartDate(date)}
+              selectsStart
+              startDate={startDate}
+              endDate={endDate}
+              placeholderText="Dari tanggal"
+              wrapperClassName="w-full sm:w-auto"
+              className="h-11 w-full text-base sm:h-10 sm:w-40 sm:text-sm px-3 border border-gray-300 rounded-md"
+            />
 
-          <DatePicker
-            selected={endDate}
-            onChange={(date) => setEndDate(date)}
-            selectsEnd
-            startDate={startDate}
-            endDate={endDate}
-            placeholderText="Sampai tanggal"
-            className="w-40 px-3 py-2 border border-gray-300 rounded-md text-sm"
-          />
+            <DatePicker
+              selected={endDate}
+              onChange={(date) => setEndDate(date)}
+              selectsEnd
+              startDate={startDate}
+              endDate={endDate}
+              placeholderText="Sampai tanggal"
+              wrapperClassName="w-full sm:w-auto"
+              className="h-11 w-full text-base sm:h-10 sm:w-40 sm:text-sm px-3 border border-gray-300 rounded-md"
+            />
+          </div>
 
-          <div className="relative">
+          <div className="relative w-full sm:w-72">
             <input
-              type="text"
+              type="search"
+              aria-label="Cari kode booking, email, nama, atau mobil..."
               placeholder="Cari kode booking, email, nama, atau mobil..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg w-72 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
+              className="h-11 w-full text-base sm:h-10 pl-10 pr-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
             />
-            <Search className="absolute left-3 top-2.5 text-gray-400" size={20} />
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} aria-hidden="true" />
           </div>
 
           <button
             onClick={exportToExcel}
-            className="flex items-center space-x-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:from-orange-600 hover:to-yellow-600"
+            className="inline-flex h-11 w-full items-center justify-center gap-2 sm:h-10 sm:w-auto bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:from-orange-600 hover:to-yellow-600"
           >
             <FileDown size={20} /> 
             <span>Download ke Excel</span>
@@ -996,7 +1002,7 @@ const filteredTransactions = transactions.filter((trx) => {
                       <div className="space-y-4">
                         <div>
                           <h4 className="text-lg font-semibold mb-4">Data Penyewa</h4>
-                          <div className="grid grid-cols-2 gap-4">
+                          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 [overflow-wrap:anywhere]">
                             <div>
                               <p className="text-sm text-gray-600">Nama</p>
                               <p className="font-medium">{selectedTransaction.name}</p>
