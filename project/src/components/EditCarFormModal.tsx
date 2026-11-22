@@ -1,8 +1,10 @@
 // EditCarFormModal.tsx
-import { Dialog, Transition } from "@headlessui/react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import axios from "axios";
 import toast from 'react-hot-toast';
+import { fileUrl } from "../lib/fileUrl";
+import { notifyError, notifySuccess } from "../lib/notify";
+import { ImageDialog, Modal, ModalButton } from "./ui/Modal";
 
 interface Car {
   id: number;
@@ -34,7 +36,6 @@ const EditCarFormModal: React.FC<EditCarFormModalProps> = ({
   car,
   onSuccess,
 }) => {
-  const cancelButtonRef = useRef(null);
   const [formData, setFormData] = useState<Car>({ ...car });
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [popupImage, setPopupImage] = useState<string | null>(null);
@@ -43,7 +44,7 @@ const EditCarFormModal: React.FC<EditCarFormModalProps> = ({
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
 
 
-  const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
 
   const refs = {
     name: useRef<HTMLInputElement>(null),
@@ -187,58 +188,33 @@ const EditCarFormModal: React.FC<EditCarFormModalProps> = ({
         withCredentials: true,
       });
 
-      toast.success("Berhasil mengubah data mobil");
+      notifySuccess("Mobil berhasil diperbarui.");
       onSuccess();
     } catch (err) {
       console.error("Gagal mengubah data mobil", err);
-      toast.error("Gagal mengubah data mobil");
+      notifyError(err, "Mobil gagal diperbarui");
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <Transition.Root show={isOpen} as={Fragment}>
-      <Dialog as="div" className="relative z-10" initialFocus={cancelButtonRef} onClose={onClose}>
-        <Transition.Child
-          as={Fragment}
-          enter="ease-out duration-300"
-          enterFrom="opacity-0"
-          enterTo="opacity-100"
-          leave="ease-in duration-200"
-          leaveFrom="opacity-100"
-          leaveTo="opacity-0"
-        >
-          <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" />
-        </Transition.Child>
-
-        <div className="fixed inset-0 z-10 overflow-y-auto">
-          <div className="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
-            <Transition.Child
-              as={Fragment}
-              enter="ease-out duration-300"
-              enterFrom="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
-              enterTo="opacity-100 translate-y-0 sm:scale-100"
-              leave="ease-in duration-200"
-              leaveFrom="opacity-100 translate-y-0 sm:scale-100"
-              leaveTo="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
-            >
-                <Dialog.Panel className="relative transform overflow-hidden rounded-lg bg-white px-6 pb-6 pt-5 pr-12 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-3xl sm:p-6">
-
-                <button
-                  onClick={onClose}
-                  className="absolute top-4 right-12 text-gray-500 text-xl z-50"
-                  aria-label="Tutup"
-                >
-                  ✕
-                </button>
-  
-                <div className="max-h-[80vh] overflow-y-auto px-6 pb-6 pt-5 sm:p-6">
-                <Dialog.Title as="h3" className="text-lg font-semibold leading-6 text-gray-900 mb-4">
-                  Edit Data Mobil
-                </Dialog.Title>
-
-                <form className="space-y-4">
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      title="Edit Data Mobil"
+      size="lg"
+      busy={isSubmitting}
+      footer={
+        <>
+          <ModalButton onClick={onClose} disabled={isSubmitting}>Batal</ModalButton>
+          <ModalButton variant="primary" onClick={handleSubmit} busy={isSubmitting} busyLabel="Menyimpan...">
+            Simpan
+          </ModalButton>
+        </>
+      }
+    >
+                <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void handleSubmit(); }}>
                   {["name", "brand", "type", "seats", "daily_rate", "monthly_rate", "deposit", "quantity"].map((key) => {
                     const isNumberField = ["seats", "daily_rate", "monthly_rate", "deposit", "quantity"].includes(key);
                     return (
@@ -336,10 +312,10 @@ const EditCarFormModal: React.FC<EditCarFormModalProps> = ({
                         {formData.image.map((img, idx) => (
                           <img
                             key={idx}
-                            src={`http://localhost:5000/uploads/${img}`}
+                            src={fileUrl(img)}
                             alt={`Image ${idx + 1}`}
                             className="w-full h-32 object-cover border rounded cursor-pointer hover:opacity-80"
-                            onClick={() => setPopupImage(`http://localhost:5000/uploads/${img}`)}
+                            onClick={() => setPopupImage(fileUrl(img) ?? null)}
                           />
                         ))}
                       </div>
@@ -374,45 +350,8 @@ const EditCarFormModal: React.FC<EditCarFormModalProps> = ({
                   </div>
                 </form>
 
-                {/* Tombol */}
-                <div className="flex justify-end gap-2 pt-4">
-                  <button
-                    type="button"
-                    className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-                    onClick={onClose}
-                    ref={cancelButtonRef}
-                    disabled={isSubmitting}
-                  >
-                    Batal
-                  </button>
-                  <button
-                    type="button"
-                    className="px-4 py-2 bg-gradient-to-r from-orange-500 to-yellow-500 text-white rounded-xl hover:from-orange-600 hover:to-yellow-600"
-                    onClick={handleSubmit}
-                    disabled={isSubmitting}
-                  >
-                    Simpan
-                  </button>
-                  </div>
-                </div>
-              </Dialog.Panel>
-            </Transition.Child>
-          </div>
-        </div>
-
-        {/* Preview Gambar Pop Up */}
-        {popupImage && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70" onClick={() => setPopupImage(null)}>
-            <img
-              src={popupImage}
-              alt="Popup"
-              className="max-w-3xl max-h-[90vh] rounded shadow-2xl border-4 border-white"
-              onClick={(e) => e.stopPropagation()}
-            />
-          </div>
-        )}
-      </Dialog>
-    </Transition.Root>
+                <ImageDialog src={popupImage} alt="Gambar mobil" onClose={() => setPopupImage(null)} />
+    </Modal>
   );
 };
 

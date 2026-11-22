@@ -1,0 +1,10 @@
+[Unit]
+Description=Run ARMJ rentcar backup daily at 02:30 WIB
+
+[Timer]
+OnCalendar=*-*-* 19:30:00 UTC
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

@@ -1,16 +1,19 @@
-// FINAL FIXED CustomerBookingForm.tsx — lengkap semua field sesuai dashboard, prefill hanya Tipe Identitas
 import React, { useState, useEffect, useMemo } from 'react';
 import PhoneInput from 'react-phone-input-2';
 import 'react-phone-input-2/lib/style.css';
 import numeral from 'numeral';
 import { toast } from 'react-hot-toast';
+import { CarRate, estimateBooking } from '../types';
+import { PriceBreakdown } from './BookingConfirmation';
+import { Modal, ModalButton } from './ui/Modal';
 
 interface CustomerBookingFormProps {
   onCancel: () => void;
   onSubmit: (data: any) => void;
   initialData?: Partial<any>;
-  savedData?: any; // ✅ untuk restore data dari parent
-  onChange?: (data: any) => void; // ✅ untuk kirim perubahan ke parent
+  // Restores the form when the admin comes back from the terms or confirmation step.
+  savedData?: any;
+  onChange?: (data: any) => void;
 }
 
 
@@ -90,7 +93,7 @@ useEffect(() => {
 }, [formData]);
   
 
-  const [carRates, setCarRates] = useState<any[]>([]);
+  const [carRates, setCarRates] = useState<CarRate[]>([]);
   const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
   useEffect(() => {
@@ -134,56 +137,28 @@ useEffect(() => {
     return startDate.toISOString().split('T')[0];
   };
 
-  const estimatedBreakdown = useMemo(() => {
-    const selectedCar = carRates.find((car) => car.value === formData.carType);
-    if (!selectedCar || !formData.rangeRent || formData.rangeRent <= 0) return null;
-    const isDaily = formData.rentalDuration === 'daily';
-    const rate = isDaily ? Number(selectedCar.daily_rate) : Number(selectedCar.monthly_rate);
-    const durationLabel = isDaily ? 'hari' : 'bulan';
-    const rentalCost = rate * formData.rangeRent;
-    const tripFee = formData.needsTrip ? formData.tripFee || 0 : 0;
-    const driverFee = formData.needsDriver ? formData.driverFee || 0 : 0;
-    const deliveryFee = formData.needsDelivery ? formData.deliveryFee || 0 : 0;
-    const pickupFee = formData.needsPickup ? formData.pickupFee || 0 : 0;
-    const deposit = formData.deposit || 0;
-    const discount = formData.discount || 0;
-    const discountedRentalCost = rentalCost - discount;
-    const grandTotalBeforeDiscount = rentalCost + deposit + tripFee + driverFee + deliveryFee + pickupFee;
-    const grandTotalAfterDiscount = discountedRentalCost + deposit + tripFee + driverFee + deliveryFee + pickupFee;
-    const discountPercentage = rentalCost > 0 ? (discount / rentalCost) * 100 : 0;
-    return {
-      label: selectedCar.label,
-      rate,
-      durationLabel,
-      rentalCost,
-      discountedRentalCost,
-      discount,
-      deposit,
-      discountPercentage,
-      tripFee,
-      driverFee,
-      deliveryFee,
-      pickupFee,
-      grandTotalBeforeDiscount,
-      grandTotalAfterDiscount,
-    };
-  }, [formData, carRates]);
+  const estimate = useMemo(() => estimateBooking(formData, carRates), [formData, carRates]);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6">
-      <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
-        <div className="p-6">
-          <div className="flex justify-between items-center mb-6">
-            <h3 className="text-2xl font-semibold">Formulir Reorder</h3>
-            <button onClick={onCancel} className="text-gray-500 hover:text-gray-700">✕</button>
-          </div>
-
-          <form onSubmit={(e) => { e.preventDefault();
-            const finalFormData = {
-              ...formData,
-              grandTotal: estimatedBreakdown?.grandTotalAfterDiscount ?? 0
-            };
-            onSubmit(finalFormData); }} className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <Modal
+      open
+      onClose={onCancel}
+      title="Formulir Reorder"
+      size="xl"
+      footer={
+        <>
+          <ModalButton onClick={onCancel}>Batal</ModalButton>
+          <ModalButton type="submit" form="reorder-form" variant="primary">Lanjut</ModalButton>
+        </>
+      }
+    >
+          <form id="reorder-form" onSubmit={(e) => { e.preventDefault();
+            if (!estimate) {
+              toast.error('Total belum bisa dihitung. Periksa tipe mobil dan lama sewa.');
+              return;
+            }
+            // The reorder request recomputes totals from rentalCost with computeTotals.
+            onSubmit({ ...formData, rentalCost: estimate.totals.rental_cost }); }} className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Nama</label>
               <input
@@ -341,17 +316,20 @@ useEffect(() => {
                   className="w-full rounded-lg border border-gray-300 pl-10 pr-20 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
                   placeholder="Contoh: 25.000"
                 />
-                <span className="absolute right-3 inset-y-0 flex items-center text-sm text-orange-600 font-semibold">
-                  {estimatedBreakdown?.rentalCost
-                    ? `${((formData.discount / estimatedBreakdown.rentalCost) * 100).toFixed(2)}%`
-                    : '0%'}
+                <span className="absolute right-3 inset-y-0 flex items-center text-sm text-orange-700 font-semibold">
+                  {estimate ? `${estimate.discountPercentage.toFixed(2)}%` : '0%'}
                 </span>
               </div>
+              {estimate && formData.discount > estimate.totals.rental_cost && (
+                <p className="mt-1 text-xs text-gray-700">
+                  Diskon melebihi harga sewa, jadi yang dipakai Rp {estimate.totals.discount_applied.toLocaleString('id-ID')}.
+                </p>
+              )}
             </div>
 
-            <div className="col-span-2 flex flex-col gap-2">
+            <div className="md:col-span-2 flex flex-col gap-2">
               <label className="text-sm font-medium text-gray-700">Layanan Tambahan</label>
-              <div className="flex gap-4">
+              <div className="flex flex-wrap gap-4">
                 <label><input type="checkbox" checked={formData.needsTrip} onChange={(e) => setFormData({ ...formData, needsTrip: e.target.checked })}/> Biaya Luar Kota</label>
                 <label><input type="checkbox" checked={formData.needsDriver} onChange={(e) => setFormData({ ...formData, needsDriver: e.target.checked })}/> Butuh Supir</label>
                 <label><input type="checkbox" checked={formData.needsDelivery} onChange={(e) => setFormData({ ...formData, needsDelivery: e.target.checked })}/> Butuh Antar</label>
@@ -360,7 +338,7 @@ useEffect(() => {
             </div>
 
            {(formData.needsTrip || formData.needsDelivery || formData.needsPickup || formData.needsDriver) && (
-              <div className="flex gap-4 col-span-2">
+              <div className="flex flex-col sm:flex-row gap-4 md:col-span-2">
                   {formData.needsTrip && (
                   <div className="flex-1">
                       <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -475,42 +453,21 @@ useEffect(() => {
               </div>
             )}
 
-            <div className="col-span-2">
+            <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1">Tujuan Sewa <span className="text-red-500">*</span></label>
               <textarea required value={formData.purpose} onChange={(e) => setFormData({ ...formData, purpose: e.target.value })} className="w-full rounded-lg border border-gray-300 px-4 py-2" />
             </div>
 
-            <div className="col-span-2">
-              {estimatedBreakdown && (
-                <div className="mt-6 p-4 border border-orange-200 bg-orange-50 rounded-xl text-sm text-gray-800 space-y-1 w-full">
-                  <p className="underline text-base font-bold text-black-800">Kisaran Harga</p>
-                  <p className="font-semibold">{estimatedBreakdown.label} disewa Selama {formData.rangeRent} {estimatedBreakdown.durationLabel}</p>
-                  <p>Harga Sewa Mobil: Rp {estimatedBreakdown.rate.toLocaleString()} x {formData.rangeRent} = Rp {estimatedBreakdown.rentalCost.toLocaleString()}</p>
-                  {formData.deposit && <p>Biaya Deposit: Rp {estimatedBreakdown.deposit.toLocaleString()}</p>}
-                  {formData.needsTrip && <p>Biaya Luar Kota: Rp {estimatedBreakdown.tripFee.toLocaleString()}</p>}
-                  {formData.needsDriver && <p>Biaya Supir: Rp {estimatedBreakdown.driverFee.toLocaleString()}</p>}
-                  {formData.needsDelivery && <p>Biaya Antar: Rp {estimatedBreakdown.deliveryFee.toLocaleString()}</p>}
-                  {formData.needsPickup && <p>Biaya Jemput: Rp {estimatedBreakdown.pickupFee.toLocaleString()}</p>}
-                  <hr className="my-2 border-orange-300" />
-                  <p className="font-medium">Total Sebelum Diskon: Rp {estimatedBreakdown.grandTotalBeforeDiscount.toLocaleString()}</p>
-                  {estimatedBreakdown.discount > 0 && (
-                    <>
-                      <p>Diskon: - Rp {estimatedBreakdown.discount.toLocaleString()} / <span className="font-semibold">{estimatedBreakdown.discountPercentage.toFixed(2)}%</span></p>
-                      <p className="font-bold text-orange-700">Total Setelah Diskon: Rp {estimatedBreakdown.grandTotalAfterDiscount.toLocaleString()}</p>
-                    </>
-                  )}
+            <div className="md:col-span-2">
+              {estimate && (
+                <div className="mt-6 p-4 border border-orange-200 bg-orange-50 rounded-xl w-full">
+                  <p className="text-base font-bold text-gray-900 mb-2">Kisaran Harga</p>
+                  <PriceBreakdown estimate={estimate} rangeRent={formData.rangeRent} />
                 </div>
               )}
             </div>
-
-            <div className="col-span-2 flex justify-end gap-4 mt-6">
-              <button type="button" onClick={onCancel} className="px-4 py-2 bg-gray-300 rounded-lg">Batal</button>
-              <button type="submit" className="px-4 py-2 bg-orange-500 text-white rounded-lg">Lanjut</button>
-            </div>
           </form>
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 };
 

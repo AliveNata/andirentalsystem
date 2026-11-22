@@ -3,3 +3,10 @@ node_modules
 # env files - keep .env.example only
 .env
 project/.env
+
+# file upload customer (dokumen identitas, bukti bayar) dan file debug
+uploads/
+*-debug.html
+
+# catatan internal (QA, deploy, data); repo ini public
+plans/

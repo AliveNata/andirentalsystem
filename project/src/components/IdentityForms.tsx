@@ -17,8 +17,8 @@ interface FileInputProps {
 
 const MAX_FILE_SIZE_MB = 1;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
-const ALLOWED_FILE_TYPES = ['image/jpeg', 'image/jpg', 'application/pdf'];
-const ALLOWED_FILE_EXTENSIONS = ['.jpg', '.jpeg', '.pdf'];
+const ALLOWED_FILE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
+const ALLOWED_FILE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.pdf'];
 
 const FileInput: React.FC<FileInputProps> = ({ label, onChange, required = true }) => {
   const [errorMessage, setErrorMessage] = useState('');
@@ -37,7 +37,7 @@ const FileInput: React.FC<FileInputProps> = ({ label, onChange, required = true 
 
       // Check file type
       if (!ALLOWED_FILE_TYPES.includes(file.type)) {
-        setErrorMessage('Format file tidak sesuai. Hanya file JPG, JPEG, atau PDF yang diperbolehkan.');
+        setErrorMessage('Format file tidak sesuai. Hanya file JPG, JPEG, PNG, atau PDF yang diperbolehkan.');
         e.target.value = '';
         onChange(null);
         return;
@@ -64,7 +64,7 @@ const FileInput: React.FC<FileInputProps> = ({ label, onChange, required = true 
           accept={ALLOWED_FILE_EXTENSIONS.join(',')}
         />
         <p className="text-xs text-gray-500">
-          Format yang diperbolehkan: JPG, JPEG, PDF. Maksimal ukuran file: {MAX_FILE_SIZE_MB}MB
+          Format yang diperbolehkan: JPG, JPEG, PNG, PDF. Maksimal ukuran file: {MAX_FILE_SIZE_MB}MB
         </p>
         {errorMessage && (
           <p className="text-sm text-red-500">{errorMessage}</p>

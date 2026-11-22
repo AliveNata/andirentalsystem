@@ -1,142 +1,137 @@
+const { escapeHtml, safeUrl, safeImageUrl, formatRupiah, formatDateId, formatTimeId } = require('./htmlSafe.cjs');
+const { ADMIN_WHATSAPP, BRAND_NAME } = require('./brand.cjs');
+
+const SERVICES = [
+  ['driver', 'driver_fee', 'Biaya Sopir'],
+  ['delivery', 'delivery_fee', 'Biaya Antar Mobil'],
+  ['pickup', 'pickup_fee', 'Biaya Jemput Mobil'],
+  ['trip', 'trip_fee', 'Biaya Luar Kota'],
+];
+
+function amountRow(label, value, { note = '', strong = false, topBorder = false } = {}) {
+  const border = topBorder ? 'border-top:1px solid #ccc;' : '';
+  const weight = strong ? 'font-weight:bold;' : '';
+  const noteHtml = note ? `<br><span style="font-size:12px;color:#57534E;">${escapeHtml(note)}</span>` : '';
+  return `
+          <tr style="${weight}">
+            <td style="padding:6px 0;${border}">${escapeHtml(label)}${noteHtml}</td>
+            <td align="right" style="padding:6px 0;white-space:nowrap;vertical-align:top;${border}">${escapeHtml(value)}</td>
+          </tr>`;
+}
+
+// Totals come from computeTotals() on the stored row; this template only prints them.
 function generateInvoiceEmail({
-  customerName,
   bookingCode,
+  customerName,
   carType,
   startDate,
   startTime,
   endDate,
-  needsTrip,
-  needsDriver,
-  needsDelivery,
-  needsPickup,
-  rentalCost,
-  deposit,
-  discount,
-  tripFee,
-  driverFee,
-  deliveryFee,
-  pickupFee,
-  bankList,
-  logoUrl
+  needs,
+  totals,
+  bankList = [],
+  logoUrl,
+  adminWhatsapp = ADMIN_WHATSAPP,
 }) {
-  const dps = Number(deposit) || 0;
-  const tf = Number(tripFee) || 0;
-  const df = Number(driverFee) || 0;
-  const dlf = Number(deliveryFee) || 0;
-  const puf = Number(pickupFee) || 0;
-  const disc = Number(discount) || 0;
-  const baseRental = Number(rentalCost) || 0;
+  const logo = safeImageUrl(logoUrl);
+  const waLink = safeUrl(adminWhatsapp.waLink);
+  const waText = escapeHtml(adminWhatsapp.display);
+  const waHtml = waLink
+    ? `<a href="${waLink}" style="color:#C2410C;text-decoration:underline;">${waText}</a>`
+    : waText;
+  const startTimeText = formatTimeId(startTime);
 
-  const discountedRentalCost = baseRental - disc;
-  const grandTotalBeforeDeposit = baseRental - dps;
-  const grandTotalBeforeDiscount = baseRental + dps + tf + df + dlf + puf;
-  const grandTotalAfterDiscount = discountedRentalCost + dps + tf + df + dlf + puf;
+  const header = logo
+    ? `<img src="${logo}" alt="${escapeHtml(BRAND_NAME)}" width="120" style="display:block;margin:0 auto 8px;" />`
+    : `<p style="margin:0;color:#fff;font-size:20px;font-weight:bold;">${escapeHtml(BRAND_NAME)}</p>`;
+
+  const bankRows = bankList.map((bank) => {
+    const bankLogo = safeImageUrl(bank.logoUrl);
+    return `
+            <tr style="vertical-align:middle;text-align:center;">
+              <td style="padding:8px;">
+                ${bankLogo ? `<img src="${bankLogo}" alt="${escapeHtml(bank.bankName)}" style="height:32px;" />` : escapeHtml(bank.bankName)}
+              </td>
+              <td style="padding:8px;font-size:14px;"><strong>${escapeHtml(bank.accountNumber)}</strong></td>
+              <td style="padding:8px;font-size:14px;">a/n ${escapeHtml(bank.accountHolder)}</td>
+            </tr>`;
+  }).join('');
+
+  const serviceRows = SERVICES
+    .filter(([flag]) => needs[flag] === true)
+    .map(([, key, label]) => amountRow(label, formatRupiah(totals[key])))
+    .join('');
+
+  const yesNo = (flag) => (needs[flag] === true ? 'Ya' : 'Tidak');
 
   return `
   <div style="background-color:#f1f1f1;padding:24px;font-family:Arial,sans-serif">
-    <div style="max-width:640px;margin:auto;border:2px solid #f97316;border-radius:10px;overflow:hidden;background-color:#fff;">
+    <div style="max-width:640px;margin:auto;border:2px solid #C2410C;border-radius:10px;overflow:hidden;background-color:#fff;">
 
-      <!-- HEADER -->
-      <div style="background-color:#f97316;padding:24px;text-align:center;">
-        <img src="${logoUrl}" alt="Andi Rental Mobil" width="120" style="display:block; margin:0 auto 8px;" />
+      <div style="background-color:#C2410C;padding:24px;text-align:center;">
+        ${header}
         <p style="margin:12px 0 0;color:#fff;font-size:14px;">Konfirmasi Pemesanan Mobil Anda</p>
       </div>
 
-      <!-- INFO CUSTOMER -->
       <div style="background-color:#f1f1f1;padding:24px;text-align:left;font-size:14px;color:#333;">
         <p style="margin:0 0 12px;">
-          Hai <strong>${customerName}</strong>,<br><br>
-          Terima kasih sudah melakukan pemesanan di <strong>Andi Rental Mobil</strong>.<br><br>
-          Kode booking kamu sudah berhasil dibuat. Silakan lakukan pembayaran dalam waktu <strong>1x24 jam</strong> sejak email ini dikirim. Jika melebihi batas waktu tersebut dan belum ada konfirmasi, maka kode booking akan otomatis dibatalkan oleh sistem.<br><br>
-          Kalau kamu butuh info lebih lanjut atau ingin konfirmasi pembayaran, silakan hubungi tim admin kami lewat WhatsApp di:
-          <a href="https://wa.me/628123456789" style="color:#f97316;text-decoration:underline;">08123456789</a> /
-          <a href="https://wa.me/628777777777" style="color:#f97316;text-decoration:underline;">0877777777</a>
+          Halo <strong>${escapeHtml(customerName)}</strong>,<br><br>
+          Terima kasih sudah memesan mobil di <strong>${escapeHtml(BRAND_NAME)}</strong>.<br><br>
+          Kode booking Anda sudah dibuat. Silakan lakukan pembayaran dalam <strong>1x24 jam</strong> sejak email ini dikirim. Jika lewat dari batas waktu tersebut dan belum ada konfirmasi, kode booking akan dibatalkan.<br><br>
+          Untuk informasi lebih lanjut atau konfirmasi pembayaran, hubungi admin kami lewat WhatsApp di ${waHtml}.
         </p>
       </div>
 
-      <!-- DOT LINE ATAS -->
       <div style="border-top: 2px dotted #ccc; width: 100%; margin: 0;"></div>
 
-      <!-- REKENING -->
       <div style="background-color:#ffffff;padding:24px;text-align:center;">
-        <p style="margin:0;font-weight:bold;font-size:16px;">💳 Silakan melakukan pembayaran ke nomor rekening di bawah ini</p>
+        <p style="margin:0;font-weight:bold;font-size:16px;">Silakan lakukan pembayaran ke salah satu rekening berikut</p>
         <table align="center" cellpadding="0" cellspacing="0" style="margin-top:16px;">
-          ${bankList.map(bank => `
-            <tr style="vertical-align:middle;text-align:center;">
-              <td style="padding:8px;">
-                ${bank.logoUrl ? `<img src="${bank.logoUrl}" alt="${bank.bankName}" style="height:32px;" />` : ''}
-              </td>
-              <td style="padding:8px;font-size:14px;"><strong>${bank.accountNumber}</strong></td>
-              <td style="padding:8px;font-size:14px;">a/n ${bank.accountHolder}</td>
-            </tr>
-          `).join('')}
+          ${bankRows}
         </table>
       </div>
 
-      <!-- INFO BOOKING -->
       <div style="padding:0 24px;">
         <div style="border-top:1px dashed #ccc;margin:24px 0;"></div>
         <table cellpadding="0" cellspacing="0" width="100%" style="font-size:14px;color:#333;text-align:center;">
           <tr>
-            <td style="padding:12px;border:1px solid #ccc;"><strong>Kode Booking</strong><br>${bookingCode}</td>
-            <td style="padding:12px;border:1px solid #ccc;"><strong>Mobil yang Dipesan</strong><br>${carType}</td>
+            <td style="padding:12px;border:1px solid #ccc;"><strong>Kode Booking</strong><br>${escapeHtml(bookingCode)}</td>
+            <td style="padding:12px;border:1px solid #ccc;"><strong>Mobil yang Dipesan</strong><br>${escapeHtml(carType)}</td>
           </tr>
           <tr>
             <td style="padding:12px;border:1px solid #ccc;">
               <strong>Tanggal Sewa Dimulai</strong><br>
-              ${startDate}${startTime ? ` ${startTime}` : ''}
+              ${escapeHtml(formatDateId(startDate))}${startTimeText ? `, pukul ${escapeHtml(startTimeText)}` : ''}
             </td>
-            <td style="padding:12px;border:1px solid #ccc;"><strong>Tanggal Sewa Berakhir</strong><br>${endDate}</td>
+            <td style="padding:12px;border:1px solid #ccc;"><strong>Tanggal Sewa Berakhir</strong><br>${escapeHtml(formatDateId(endDate))}</td>
           </tr>
           <tr>
-            <td style="padding:12px;border:1px solid #ccc;"><strong>Luar Kota</strong><br>${needsTrip ? 'Iya' : 'Tidak'}</td>
-            <td style="padding:12px;border:1px solid #ccc;"><strong>Pakai Jasa Supir</strong><br>${needsDriver ? 'Iya' : 'Tidak'}</td>
+            <td style="padding:12px;border:1px solid #ccc;"><strong>Luar Kota</strong><br>${yesNo('trip')}</td>
+            <td style="padding:12px;border:1px solid #ccc;"><strong>Pakai Jasa Sopir</strong><br>${yesNo('driver')}</td>
           </tr>
           <tr>
-            <td style="padding:12px;border:1px solid #ccc;"><strong>Antar Mobil</strong><br>${needsDelivery ? 'Iya' : 'Tidak'}</td>
-            <td style="padding:12px;border:1px solid #ccc;"><strong>Jemput Mobil</strong><br>${needsPickup ? 'Iya' : 'Tidak'}</td>
+            <td style="padding:12px;border:1px solid #ccc;"><strong>Antar Mobil</strong><br>${yesNo('delivery')}</td>
+            <td style="padding:12px;border:1px solid #ccc;"><strong>Jemput Mobil</strong><br>${yesNo('pickup')}</td>
           </tr>
         </table>
       </div>
 
-      <!-- RINCIAN PEMBAYARAN -->
       <div style="padding:24px;">
-        <h3 style="margin-top:0;margin-bottom:12px;color:#f97316;">💰 Rincian Pembayaran</h3>
-        <table width="100%" style="font-size:14px;">
-          <tr>
-            <td>Harga Sewa</td>
-            <td align="right">Rp ${grandTotalBeforeDeposit.toLocaleString('id-ID')}</td>
-          </tr>
-          <tr>
-            <td>Deposit</td>
-            <td align="right">Rp ${dps.toLocaleString('id-ID')}</td>
-          </tr>
-          ${needsTrip ? `<tr><td>Biaya Luar Kota</td><td align="right">Rp ${tf.toLocaleString('id-ID')}</td></tr>` : ''}
-          ${needsDriver ? `<tr><td>Biaya Supir</td><td align="right">Rp ${df.toLocaleString('id-ID')}</td></tr>` : ''}
-          ${needsDelivery ? `<tr><td>Biaya Antar</td><td align="right">Rp ${dlf.toLocaleString('id-ID')}</td></tr>` : ''}
-          ${needsPickup ? `<tr><td>Biaya Jemput</td><td align="right">Rp ${puf.toLocaleString('id-ID')}</td></tr>` : ''}
-          <tr style="border-top:1px solid #ccc;">
-            <td><strong>Total Sebelum Diskon</strong></td>
-            <td align="right">Rp ${grandTotalBeforeDiscount.toLocaleString('id-ID')}</td>
-          </tr>
-          ${discount > 0 ? `
-            <tr>
-              <td>Diskon</td>
-              <td align="right">- Rp ${disc.toLocaleString('id-ID')}</td>
-            </tr>` : ''}
-          <tr style="font-weight:bold;">
-            <td><strong>Total Setelah Diskon</strong></td>
-            <td align="right"><strong>Rp ${grandTotalAfterDiscount.toLocaleString('id-ID')}</strong></td>
-          </tr>
+        <h3 style="margin-top:0;margin-bottom:12px;color:#C2410C;">Rincian Pembayaran</h3>
+        <table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;color:#333;">
+          ${amountRow('Biaya Sewa', formatRupiah(totals.rental_cost))}
+          ${totals.discount_applied > 0 ? amountRow('Diskon', '-' + formatRupiah(totals.discount_applied)) : ''}
+          ${serviceRows}
+          ${totals.deposit > 0 ? amountRow('Subtotal sewa dan layanan', formatRupiah(totals.subtotal), { topBorder: true }) : ''}
+          ${totals.deposit > 0 ? amountRow('Deposit (uang jaminan)', formatRupiah(totals.deposit), { note: 'Dikembalikan setelah masa sewa selesai' }) : ''}
+          ${amountRow('Total yang harus dibayar', formatRupiah(totals.grand_total), { strong: true, topBorder: true })}
         </table>
       </div>
 
-      <!-- DOT LINE BAWAH -->
       <div style="border-top: 2px dotted #ccc; width: 100%; margin: 0;"></div>
 
-      <!-- FOOTER -->
-      <div style="background-color:#f1f1f1;padding:12px;text-align:center;font-size:12px;color:#888;">
-        Email ini dikirim otomatis. Mohon untuk tidak membalas secara langsung.
+      <div style="background-color:#f1f1f1;padding:12px;text-align:center;font-size:12px;color:#57534E;">
+        Email ini dikirim otomatis, jadi mohon jangan dibalas. Untuk pertanyaan, hubungi WhatsApp admin dan sebutkan kode booking Anda.
       </div>
 
     </div>

@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { LogIn, Eye, EyeOff, Sun, Moon } from 'lucide-react';
+import { Eye, EyeOff, Sun, Moon } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+
+import { DEFAULT_LOGO, fetchPublicWebConfig } from '../lib/webConfig';
 
 type LoginProps = {
   onLogin: (username: string, password: string) => void;
@@ -33,12 +35,18 @@ function Login({ onLogin }: LoginProps) {
         body: JSON.stringify({ username, password })
       });
 
-      const data = await res.json();
-      console.log('🟢 Login Berhasil:', data);
+      // nginx answers 429 (rate limit) and 502 with an HTML page, so the body may not be JSON.
+      const data = await res.json().catch(() => null);
 
-      if (!res.ok) {
-        toast.error(data.message || 'Login gagal');
-        throw new Error(data.message || 'Login failed');
+      if (!res.ok || !data) {
+        if (res.status === 429) {
+          toast.error('Terlalu banyak percobaan login. Coba lagi sebentar lagi.');
+        } else if (data?.message) {
+          toast.error(data.message);
+        } else {
+          toast.error('Login gagal karena server tidak bisa dihubungi. Coba lagi sebentar lagi.');
+        }
+        return;
       }
 
       localStorage.setItem('user', JSON.stringify({
@@ -49,8 +57,10 @@ function Login({ onLogin }: LoginProps) {
 
       onLogin(username, password); // ini akan update state Auth di App.tsx
       navigate('/dashboard'); // opsional
-    } catch (err: any) {
-      console.error(err);
+    } catch (err) {
+      // Usually the request got no answer at all (offline, DNS, blocked by the browser).
+      console.error('Login gagal:', err);
+      toast.error('Login gagal. Periksa koneksi lalu coba lagi.');
     } finally {
       setIsLoading(false);
     }
@@ -62,20 +72,15 @@ function Login({ onLogin }: LoginProps) {
     transition: { delay, duration: 0.5, ease: 'easeOut' },
   });
 
-  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [logoUrl, setLogoUrl] = useState<string>(DEFAULT_LOGO);
 
   useEffect(() => {
   const fetchLogo = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/web-config/logo`);
-      const data = await res.json();
-      if (res.ok) {
-        setLogoUrl(data?.url_image);
-      } else {
-        console.error('Gagal ambil logo:', data);
-      }
-    } catch (err) {
-      console.error('Error fetching logo:', err);
+      const { logo } = await fetchPublicWebConfig();
+      if (logo) setLogoUrl(logo);
+    } catch {
+      // Logo bawaan tetap tampil kalau logo dari Pengaturan tidak bisa diambil.
     }
   };
 
@@ -103,15 +108,16 @@ function Login({ onLogin }: LoginProps) {
           <motion.div {...fadeUp(0)}>
             <div className="flex justify-center mb-6">
               <div className="flex justify-center mb-6">
-  {logoUrl ? (
-    <img
-      src={logoUrl}
-      alt="Logo"
-      className="h-24 w-24 rounded-full object-cover shadow-lg border-4 border-white dark:border-gray-700"
-    />
-  ) : (
-    <LogIn size={48} className="text-orange-500" />
-  )}
+  <img
+    src={logoUrl}
+    alt="Andi Rental Mobil Jakarta"
+    width={96}
+    height={96}
+    onError={() => {
+      if (logoUrl !== DEFAULT_LOGO) setLogoUrl(DEFAULT_LOGO);
+    }}
+    className="h-24 w-24 object-contain"
+  />
 </div>
             </div>
           </motion.div>

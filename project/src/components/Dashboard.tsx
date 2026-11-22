@@ -1,9 +1,9 @@
-import React, { useState,useEffect, useMemo } from 'react';
+import React, { useState,useEffect, useMemo, useRef, useCallback } from 'react';
 import { Users, FileText, Settings, Home, Car, List, IdCardLanyard, Stamp, BadgeDollarSign  } from 'lucide-react';
-import { CustomerForm, MarriedCustomerForm, SingleCustomerForm, CorporateCustomerForm, ForeignerCustomerForm, ReorderCustomerForm } from '../types';
+import { CustomerForm, MarriedCustomerForm, SingleCustomerForm, CorporateCustomerForm, ForeignerCustomerForm, ReorderCustomerForm, CarRate, estimateBooking, readServerError } from '../types';
 import { MarriedForm, SingleForm, CorporateForm, ForeignerForm, ReorderForm } from './IdentityForms';
 import TermsAndConditions from './TermsAndConditions';
-import BookingConfirmation from './BookingConfirmation';
+import BookingConfirmation, { PriceBreakdown } from './BookingConfirmation';
 import CustomerDatabase from './CustomerDatabase';
 import LoyaltyCustomer from './LoyaltyCustomer';
 import TransactionDatabase from './TransactionDatabase';
@@ -14,6 +14,8 @@ import Setting from './Settings';
 import numeral from 'numeral';
 import Select from 'react-select';
 import { toast } from 'react-hot-toast';
+import ExistingCustomerNotice from './ExistingCustomerNotice';
+import { useCustomerLookup } from '../lib/useCustomerLookup';
 
 
 
@@ -35,6 +37,81 @@ const deliveryOptions = [
   275000, 300000
 ];
 
+const EMPTY_MARRIED: MarriedCustomerForm = {
+  name: '',
+  whatsapp: '',
+  address: '',
+  ktpFile: null,
+  simFile: null,
+  spouseKtpFile: null,
+  kkFile: null,
+  workIdFile: null,
+  housePhotoFile: null,
+  ticketFile: null,
+  ticketHotelFile: null,
+  verificationVideoFile: null,
+  optionalRequirementFile: null
+};
+
+const EMPTY_SINGLE: SingleCustomerForm = {
+  name: '',
+  whatsapp: '',
+  address: '',
+  ktpFile: null,
+  simFile: null,
+  parentKtpFile: null,
+  kkFile: null,
+  workOrStudentIdFile: null,
+  housePhotoFile: null,
+  ticketFile: null,
+  ticketHotelFile: null,
+  verificationVideoFile: null,
+  optionalRequirementFile: null
+};
+
+const EMPTY_CORPORATE: CorporateCustomerForm = {
+  name: '',
+  whatsapp: '',
+  address: '',
+  ktpFile: null,
+  simFile: null,
+  companyAddress: '',
+  picKtpFile: null,
+  picKkFile: null,
+  companyNpwpFile: null,
+  companySiupFile: null,
+  companyNibFile: null,
+  companyPhotoFile: null,
+  ticketFile: null,
+  ticketHotelFile: null,
+  verificationVideoFile: null,
+  optionalRequirementFile: null
+};
+
+const EMPTY_FOREIGNER: ForeignerCustomerForm = {
+  name: '',
+  whatsapp: '',
+  address: '',
+  passportFile: null,
+  personalIdFile: null,
+  simFile: null,
+  kitasKitapFile: null,
+  workIdFile: null,
+  marriageDocFile: null,
+  visaFile: null,
+  housePhotoFile: null,
+  ticketFile: null,
+  ticketHotelFile: null,
+  verificationVideoFile: null,
+  optionalRequirementFile: null
+};
+
+const EMPTY_REORDER: ReorderCustomerForm = {
+  name: '',
+  whatsapp: '',
+  address: '',
+};
+
 function Dashboard({ isSidebarOpen }: DashboardProps) {
   const [activeSection, setActiveSection] = useState<'welcome' | 'customer' | 'database' | 'transaction' | 'employee' | 'car' | 'activitylog' | 'loyalty' | 'setting'>('welcome');
   const [showIdentityForm, setShowIdentityForm] = useState(false);
@@ -44,8 +121,12 @@ function Dashboard({ isSidebarOpen }: DashboardProps) {
         label: string; 
         value: string;
         }[]>([]);
-  const [carRates, setCarRates] = useState<any[]>([]);
-  const [bookingCode, setBookingCode] = useState('');
+  const [carRates, setCarRates] = useState<CarRate[]>([]);
+  const [reorderCustomerId, setReorderCustomerId] = useState<string | null>(null);
+  const [dismissedMatchKey, setDismissedMatchKey] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  // State updates land after the next render, so a fast double click needs a synchronous lock.
+  const submitLock = useRef(false);
   const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
   useEffect(() => {
@@ -122,47 +203,7 @@ useEffect(() => {
 
   
 
-  const estimatedBreakdown = useMemo(() => {
-    const selectedCar = carRates.find(
-      (car) => car.value === formData.carType
-    );
-  
-    if (!selectedCar || !formData.rangeRent || formData.rangeRent <= 0) return null;
-  
-    const isDaily = formData.rentalDuration === 'daily';
-    const rate = isDaily ? Number(selectedCar.daily_rate) : Number(selectedCar.monthly_rate);
-    const durationLabel = isDaily ? 'hari' : 'bulan';
-    const rentalCost = rate * formData.rangeRent;
-    // const driverFee = formData.needsDriver ? Number(selectedCar.driver_fee) || 0 : 0;
-    // const deliveryFee = formData.needsDelivery ? Number(selectedCar.delivery_fee) || 0 : 0;
-    const tripFee = formData.needsTrip ? formData.tripFee : 0;
-    const driverFee = formData.needsDriver ? formData.driverFee : 0;
-    const deliveryFee = formData.needsDelivery ? formData.deliveryFee : 0;
-    const pickupFee = formData.needsPickup ? formData.pickupFee : 0;
-    const maxDiscount = Math.min(formData.discount || 0, rentalCost);
-    const discountedRentalCost = rentalCost - maxDiscount;
-    const deposit = formData.deposit || 0;
-    const grandTotalBeforeDiscount = rentalCost + deposit + tripFee + driverFee + deliveryFee + pickupFee;
-    const grandTotalAfterDiscount = discountedRentalCost + deposit + tripFee + driverFee + deliveryFee + pickupFee ;
-    const discountPercentage = rentalCost > 0 ? (maxDiscount / rentalCost) * 100 : 0;
-
-    return {
-      label: selectedCar.label,
-      rate,
-      durationLabel,
-      deposit,
-      rentalCost,
-      discountedRentalCost,
-      discount: maxDiscount,
-      discountPercentage,
-      tripFee,
-      driverFee,
-      deliveryFee,
-      pickupFee, 
-      grandTotalBeforeDiscount,
-      grandTotalAfterDiscount,
-    };
-  }, [formData, carRates]);
+  const estimate = useMemo(() => estimateBooking(formData, carRates), [formData, carRates]);
 
   useEffect(() => {
     if (formData.startDate && formData.rangeRent && formData.rentalDuration) {
@@ -188,80 +229,11 @@ useEffect(() => {
     };
     
 
-  const [marriedFormData, setMarriedFormData] = useState<MarriedCustomerForm>({
-    name: '',
-    whatsapp: '',
-    address: '',
-    ktpFile: null,
-    simFile: null,
-    spouseKtpFile: null,
-    kkFile: null,
-    workIdFile: null,
-    housePhotoFile: null,
-    ticketFile: null,
-    ticketHotelFile: null,
-    verificationVideoFile: null,
-    optionalRequirementFile: null
-  });
-
-  const [singleFormData, setSingleFormData] = useState<SingleCustomerForm>({
-    name: '',
-    whatsapp: '',
-    address: '',
-    ktpFile: null,
-    simFile: null,
-    parentKtpFile: null,
-    kkFile: null,
-    workOrStudentIdFile: null,
-    housePhotoFile: null,
-    ticketFile: null,
-    ticketHotelFile: null,
-    verificationVideoFile: null,
-    optionalRequirementFile: null
-  });
-
-  const [corporateFormData, setCorporateFormData] = useState<CorporateCustomerForm>({
-    name: '',
-    whatsapp: '',
-    address: '',
-    ktpFile: null,
-    simFile: null,
-    companyAddress: '',
-    picKtpFile: null,
-    picKkFile: null,
-    companyNpwpFile: null,
-    companySiupFile: null,
-    companyNibFile: null,
-    companyPhotoFile: null,
-    ticketFile: null,
-    ticketHotelFile: null,
-    verificationVideoFile: null,
-    optionalRequirementFile: null
-  });
-
-  const [foreignerFormData, setForeignerFormData] = useState<ForeignerCustomerForm>({
-    name: '',
-    whatsapp: '',
-    address: '',
-    passportFile: null,
-    personalIdFile: null,
-    simFile: null,
-    kitasKitapFile: null,
-    workIdFile: null,
-    marriageDocFile: null,
-    visaFile: null,
-    housePhotoFile: null,
-    ticketFile: null,
-    ticketHotelFile: null,
-    verificationVideoFile: null,
-    optionalRequirementFile: null
-  });
-
-  const [reorderFormData, setReorderFormData] = useState<ReorderCustomerForm>({
-    name: '',
-    whatsapp: '',
-    address: '',
-  });
+  const [marriedFormData, setMarriedFormData] = useState<MarriedCustomerForm>(EMPTY_MARRIED);
+  const [singleFormData, setSingleFormData] = useState<SingleCustomerForm>(EMPTY_SINGLE);
+  const [corporateFormData, setCorporateFormData] = useState<CorporateCustomerForm>(EMPTY_CORPORATE);
+  const [foreignerFormData, setForeignerFormData] = useState<ForeignerCustomerForm>(EMPTY_FOREIGNER);
+  const [reorderFormData, setReorderFormData] = useState<ReorderCustomerForm>(EMPTY_REORDER);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -273,30 +245,11 @@ useEffect(() => {
     setShowTerms(true);
   };
 
-  const checkBookingCodeExists = async (code: string): Promise<boolean> => {
-  try {
-    const res = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/transaction/check-booking-code/${code}`);
-    if (!res.ok) return false;
-    const data = await res.json();
-    return data.exists;
-  } catch {
-    return false;
-  }
-};
-const handleTermsAccept = async () => {
-  let generatedCode = '';
-  let exists = true;
-
-  // Ulangi generate sampai dapat yang belum ada
-  while (exists) {
-    generatedCode = generateBookingCode();
-    exists = await checkBookingCodeExists(generatedCode);
-  }
-
-  setBookingCode(generatedCode);
-  setShowTerms(false);
-  setShowBookingConfirmation(true);
-};
+  // The server assigns the booking code when it saves the booking, so nothing is generated here.
+  const handleTermsAccept = () => {
+    setShowTerms(false);
+    setShowBookingConfirmation(true);
+  };
 
   const getCurrentIdentityData = () => {
     switch (formData.identityType) {
@@ -313,174 +266,105 @@ const handleTermsAccept = async () => {
     }
   };
 
-// Dalam fungsi handleFinalSubmit, ganti bagian konversi dokumen
-// Fungsi untuk menangani submit final dengan FormData
+  const currentWhatsapp = String(getCurrentIdentityData()?.whatsapp ?? '');
+  const lookupMatches = useCustomerLookup(formData.email, currentWhatsapp);
+  const matchKey = lookupMatches.map((m) => m.id).sort().join(',');
+  // "Tetap buat customer baru" hides this exact set of matches; a new match (e.g. from the WhatsApp field) shows it again.
+  const showExistingNotice = lookupMatches.length > 0 && matchKey !== dismissedMatchKey;
+  const existingNotice = showExistingNotice ? (
+    <ExistingCustomerNotice
+      matches={lookupMatches}
+      email={formData.email}
+      whatsapp={currentWhatsapp}
+      onOpenReorder={(customerId) => {
+        setReorderCustomerId(customerId);
+        setActiveSection('database');
+      }}
+      onContinue={() => setDismissedMatchKey(matchKey)}
+    />
+  ) : null;
+  const clearReorderRequest = useCallback(() => setReorderCustomerId(null), []);
+
 const handleFinalSubmit = async () => {
+  if (submitLock.current) return;
+
+  if (!estimate) {
+    toast.error('Total belum bisa dihitung. Periksa tipe mobil dan lama sewa.');
+    return;
+  }
+
+  submitLock.current = true;
+  setIsSubmitting(true);
   try {
-    const user = JSON.parse(localStorage.getItem('user') || '{}');
-
-    console.log("🧪 User di localStorage:", user);           // ⬅️ Tambahkan ini
-    console.log("📤 Username dikirim:", user?.username);     // ⬅️ Dan ini juga
-    
     const identityData: IdentityData = getCurrentIdentityData();
-    const selectedCar = carRates.find(
-      (car) => car.value === formData.carType
-    );
-  
-    if (!selectedCar || !formData.rangeRent || formData.rangeRent <= 0) return null;
-    const isDaily = formData.rentalDuration === 'daily';
-    const rate = isDaily ? Number(selectedCar.daily_rate) : Number(selectedCar.monthly_rate);
-    const rentalCost = rate * formData.rangeRent;
-    const tripFee = formData.needsTrip ? formData.tripFee : 0;
-    const driverFee = formData.needsDriver ? formData.driverFee : 0;
-    const deliveryFee = formData.needsDelivery ? formData.deliveryFee : 0;
-    const pickupFee = formData.needsPickup ? formData.pickupFee : 0;
-    const deposit = formData.deposit ? formData.deposit : 0;
-    const maxDiscount = Math.min(formData.discount || 0, rentalCost)
-    const grandTotal = rentalCost + deposit + tripFee + driverFee + deliveryFee + pickupFee - maxDiscount;
+    const { totals } = estimate;
 
-
-
+    // Inactive services go out as 0 (computeTotals already zeroes them); the server recomputes grand_total.
     const form = new FormData();
-    // Tambahkan data non-file
-    form.append('grand_total', grandTotal.toString());
-    form.append('booking_code', bookingCode);
     form.append('email', formData.email);
     form.append('rental_duration', formData.rentalDuration);
     form.append('car_type', formData.carType);
-    form.append('deposit', formData.deposit.toString());
-    form.append('discount', formData.discount.toString());
-    form.append('needs_trip', formData.needsTrip.toString());
-    form.append('needs_driver', formData.needsDriver ? 'true' : 'false');
-    form.append('needs_delivery', formData.needsDelivery ? 'true' : 'false');
-    form.append('needs_pickup', formData.needsPickup ? 'true' : 'false');
-    form.append('trip_fee', formData.tripFee.toString());
-    form.append('driver_fee', formData.driverFee.toString());
-    form.append('delivery_fee', formData.deliveryFee.toString());
-    form.append('pickup_fee', formData.pickupFee.toString()); 
+    form.append('range_rent', String(formData.rangeRent));
     form.append('start_date', formData.startDate);
     form.append('start_time', formData.startTime);
     form.append('end_date', formData.endDate);
     form.append('purpose', formData.purpose);
     form.append('identity_type', formData.identityType);
-    form.append('range_rent', formData.rangeRent.toString());
-    form.append('user_id', user?.id); 
-    if (user?.username) {
-      form.append('username', user.username);
-    }
+    form.append('rental_cost', String(totals.rental_cost));
+    form.append('deposit', String(totals.deposit));
+    form.append('discount', String(totals.discount_applied));
+    form.append('needs_trip', String(formData.needsTrip));
+    form.append('needs_driver', String(formData.needsDriver));
+    form.append('needs_delivery', String(formData.needsDelivery));
+    form.append('needs_pickup', String(formData.needsPickup));
+    form.append('trip_fee', String(totals.trip_fee));
+    form.append('driver_fee', String(totals.driver_fee));
+    form.append('delivery_fee', String(totals.delivery_fee));
+    form.append('pickup_fee', String(totals.pickup_fee));
 
-
-    const getFirst = (val: any) => Array.isArray(val) ? val[0] : val;
-    form.append('name', getFirst(identityData.name));
-    form.append('whatsapp', getFirst(identityData.whatsapp));
-    form.append('address', getFirst(identityData.address));
+    const getFirst = (val: unknown) => (Array.isArray(val) ? val[0] : val);
+    form.append('name', String(getFirst(identityData.name) ?? ''));
+    form.append('whatsapp', String(getFirst(identityData.whatsapp) ?? ''));
+    form.append('address', String(getFirst(identityData.address) ?? ''));
     if (typeof identityData.companyAddress === 'string') {
       form.append('company_address', identityData.companyAddress);
     }
 
-    // Kirim dokumen (File) saja, jangan string biasa
     for (const [key, value] of Object.entries(identityData)) {
-      if (['name', 'whatsapp', 'address', 'companyAddress'].includes(key)) continue;
-
       if (value instanceof File) {
         form.append(key, value);
       }
     }
-    
 
-    // Debug (optional)
-    console.log('=== FORM DATA ===');
-    for (let [key, val] of form.entries()) {
-      console.log(`${key}:`, val);
-    }
-
-    const response = await 
-    fetch(`${API_BASE_URL.replace(/\/$/, '')}/customer`, {
+    const response = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/booking`, {
       method: 'POST',
       body: form,
     });
 
     if (!response.ok) {
-      throw new Error('Gagal menyimpan data ke server.');
+      // The session guard already handles 401 and 403; the form stays filled so the admin can fix and resend.
+      if (response.status !== 401 && response.status !== 403) {
+        toast.error(await readServerError(response, 'Booking gagal disimpan. Coba lagi.'));
+      }
+      return;
     }
 
-    // === Tambahan: kirim ke /transaction ===
-    await fetch(`${API_BASE_URL.replace(/\/$/, '')}/transaction`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        booking_code: bookingCode,
-        email: formData.email,
-        rental_duration: formData.rentalDuration,
-        range_rent: formData.rangeRent,
-        car_type: formData.carType,
-        needs_trip: formData.needsTrip,
-        needs_driver: formData.needsDriver,
-        needs_delivery: formData.needsDelivery,
-        needs_pickup: formData.needsPickup,
-        trip_fee: formData.tripFee,
-        driver_fee: formData.driverFee,
-        delivery_fee: formData.deliveryFee,
-        pickup_fee: formData.pickupFee,
-        deposit: formData.deposit,
-        discount: formData.discount,
-        start_date: formData.startDate,
-        start_time: formData.startTime,
-        end_date: formData.endDate,
-        grand_total: grandTotal,
-        identity_type: formData.identityType,
-        name: identityData.name,
-        whatsapp: identityData.whatsapp,
-        address: identityData.address,
-        company_address: identityData.companyAddress || '',
-        purpose: formData.purpose,
-        username: user?.username || 'system',
-        user_id: user?.id || null,
-      }),
-});
-
-    // Setelah sukses, kirim email konfirmasi
-    // await 
-    // fetch(`${API_BASE_URL.replace(/\/$/, '')}/send-confirmation-email`, {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({
-    //     to: formData.email,
-    //     customerName: identityData.name,
-    //     bookingCode: bookingCode,
-    //     totalPrice: formData.rangeRent,
-    //     CarType: formData.carType,
-    //     startDate: formData.startDate,
-    //     startTime: formData.startTime,
-    //     endDate: formData.endDate,
-    //     needsDriver: formData.needsDriver,
-    //     needsDelivery: formData.needsDelivery,
-    //     rentalCost: rentalCost,
-    //     driverFee: driverFee,
-    //     deliveryFee: deliveryFee,
-    //     grandTotal: grandTotal, 
-    //   }),
-    //  });
-
-    // Reset form dan UI
+    const saved: { transaction?: { booking_code?: string } } = await response.json().catch(() => ({}));
+    const savedCode = saved.transaction?.booking_code;
     handleReset();
     setActiveSection('welcome');
-    toast.success('Data berhasil disimpan!');
+    toast.success(
+      savedCode ? `Booking ${savedCode} tersimpan.` : 'Booking tersimpan. Kode booking ada di menu Transaksi.',
+    );
   } catch (error) {
     console.error('Error in handleFinalSubmit:', error);
-    toast.error('Terjadi kesalahan saat menyimpan data.');
+    toast.error('Server tidak bisa dihubungi. Booking belum tersimpan.');
+  } finally {
+    submitLock.current = false;
+    setIsSubmitting(false);
   }
 };
 
-
-  const generateBookingCode = () => {
-    const date = new Date();
-    const uniqueId = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const year = date.getFullYear().toString().slice(-2);
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const day = date.getDate().toString().padStart(2, '0');
-    return `ARMJ${day}${month}${year}${uniqueId}`;
-  };
 
   const handleReset = () => {
     setFormData({
@@ -499,11 +383,18 @@ const handleFinalSubmit = async () => {
       identityType: 'single',
       tripFee: 0,
       driverFee: 0,
-      deliveryFee: 0, 
-      pickupFee: 0,    
-      deposit: 0,  
-      discount: 0  
+      deliveryFee: 0,
+      pickupFee: 0,
+      deposit: 0,
+      discount: 0
     });
+    // Identity data and files must not carry over to the next customer (finding S4).
+    setMarriedFormData(EMPTY_MARRIED);
+    setSingleFormData(EMPTY_SINGLE);
+    setCorporateFormData(EMPTY_CORPORATE);
+    setForeignerFormData(EMPTY_FOREIGNER);
+    setReorderFormData(EMPTY_REORDER);
+    setDismissedMatchKey('');
     setShowIdentityForm(false);
     setShowTerms(false);
     setShowBookingConfirmation(false);
@@ -772,7 +663,10 @@ const handleFinalSubmit = async () => {
             </div>
           </div>
         ) : activeSection === 'database' ? (
-          <CustomerDatabase />
+          <CustomerDatabase
+            initialReorderCustomerId={reorderCustomerId}
+            onInitialReorderHandled={clearReorderRequest}
+          />
         ) : activeSection === 'loyalty' ? (
           <LoyaltyCustomer />
         ) : activeSection === 'transaction' ? (
@@ -804,6 +698,8 @@ const handleFinalSubmit = async () => {
                       required
                     />
                   </div>
+
+                  {existingNotice && <div className="md:col-span-2">{existingNotice}</div>}
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -966,12 +862,15 @@ const handleFinalSubmit = async () => {
                         className="w-full rounded-lg border border-gray-300 pl-10 pr-20 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
                         placeholder="Contoh: 25.000"
                       />
-                      <span className="absolute right-3 inset-y-0 flex items-center text-sm text-orange-600 font-semibold">
-                        {estimatedBreakdown?.rentalCost
-                          ? `${((formData.discount / estimatedBreakdown.rentalCost) * 100).toFixed(2)}%`
-                          : '0%'}
+                      <span className="absolute right-3 inset-y-0 flex items-center text-sm text-orange-700 font-semibold">
+                        {estimate ? `${estimate.discountPercentage.toFixed(2)}%` : '0%'}
                       </span>
                     </div>
+                    {estimate && formData.discount > estimate.totals.rental_cost && (
+                      <p className="mt-1 text-xs text-gray-700">
+                        Diskon melebihi harga sewa, jadi yang dipakai Rp {estimate.totals.discount_applied.toLocaleString('id-ID')}.
+                      </p>
+                    )}
                   </div>
                   </div>
 
@@ -1314,45 +1213,10 @@ const handleFinalSubmit = async () => {
                   </div>
 
                   <div className="col-span-2">
-                  {estimatedBreakdown && (
-                    <div className="mt-6 p-4 border border-orange-200 bg-orange-50 rounded-xl text-sm text-gray-800 space-y-1 w-full">
-                      <p className="underline text-base font-bold text-black-800">Kisaran Harga</p>
-                      <p className="font-semibold">{estimatedBreakdown.label} disewa Selama {formData.rangeRent} {estimatedBreakdown.durationLabel}</p>
-                      <p>Harga Sewa Mobil: Rp {estimatedBreakdown.rate.toLocaleString()} x {formData.rangeRent} = Rp {estimatedBreakdown.rentalCost.toLocaleString()}</p>
-
-                      {formData.deposit > 0 && (
-                        <p>Deposit: Rp {estimatedBreakdown.deposit.toLocaleString()}</p>
-                      )}
-                      {formData.needsTrip && (
-                        <p>Biaya Luar Kota: Rp {estimatedBreakdown.tripFee.toLocaleString()}</p>
-                      )}
-                      {formData.needsDriver && (
-                        <p>Biaya Supir: Rp {estimatedBreakdown.driverFee.toLocaleString()}</p>
-                      )}
-                      {formData.needsDelivery && (
-                        <p>Biaya Antar: Rp {estimatedBreakdown.deliveryFee.toLocaleString()}</p>
-                      )}
-                      {formData.needsPickup && (
-                        <p>Biaya Jemput: Rp {estimatedBreakdown.pickupFee.toLocaleString()}</p>
-                      )}
-
-                      <hr className="my-2 border-orange-300" />
-
-                      <p className="font-medium">Total Sebelum Diskon: Rp {estimatedBreakdown.grandTotalBeforeDiscount.toLocaleString()}</p>
-
-                      {estimatedBreakdown.discount > 0 && (
-                        <>
-                          <p>
-                            Diskon: - Rp {estimatedBreakdown.discount.toLocaleString()} /{' '}
-                            <span className="font-semibold">
-                              {estimatedBreakdown.discountPercentage.toFixed(2)}%
-                            </span>
-                          </p>
-                          <p className="font-bold text-orange-700">
-                            Total Setelah Diskon: Rp {estimatedBreakdown.grandTotalAfterDiscount.toLocaleString()}
-                          </p>
-                        </>
-                      )}
+                  {estimate && (
+                    <div className="mt-6 p-4 border border-orange-200 bg-orange-50 rounded-xl w-full">
+                      <p className="text-base font-bold text-gray-900 mb-2">Kisaran Harga</p>
+                      <PriceBreakdown estimate={estimate} rangeRent={formData.rangeRent} />
                     </div>
                   )}
                   </div>
@@ -1375,14 +1239,15 @@ const handleFinalSubmit = async () => {
             ) : showBookingConfirmation ? (
               <BookingConfirmation
                 formData={formData}
-                bookingCode={bookingCode}
                 identityData={getCurrentIdentityData()}
                 onBack={() => setShowBookingConfirmation(false)}
                 onSubmit={handleFinalSubmit}
+                isSubmitting={isSubmitting}
               />
             ) : (
               <div className="bg-white rounded-xl shadow-lg p-8">
                 <form onSubmit={handleIdentityFormSubmit}>
+                  {existingNotice && <div className="mb-6">{existingNotice}</div>}
                   {renderIdentityForm()}
                   <div className="mt-6 flex space-x-4">
                     <button

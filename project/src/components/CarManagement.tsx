@@ -1,15 +1,19 @@
-import { useRef } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import CarFormModal from './CarFormModal';
 import EditCarFormModal from "./EditCarFormModal";
 import DeleteCarModal from "./DeleteCarModal";
 import axios from 'axios';
-import toast, { Toaster } from 'react-hot-toast';
+import { fileUrl } from '../lib/fileUrl';
+import { notifyError, notifySuccess } from '../lib/notify';
+import { ImageDialog, Modal } from './ui/Modal';
 import { Pencil, Trash, Search, Eye, Car} from "lucide-react";
 import { Swiper, SwiperSlide } from 'swiper/react';
-import { Autoplay, Pagination } from 'swiper/modules';
+import { Autoplay, Pagination as SwiperPagination } from 'swiper/modules';
 import 'swiper/css';
 import 'swiper/css/pagination';
+import Pagination from './ui/Pagination';
+import { ScrollableTable, TABLE_HEAD_CLASS, Th } from './ui/DataTable';
+import { usePagination } from '../lib/usePagination';
 
 interface Car {
   id: number;
@@ -32,6 +36,8 @@ interface Car {
   updated_by?: string;
 }
 
+const API_BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
+
 const CarManagement = () => {
   const [cars, setCars] = useState<Car[]>([]);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -41,19 +47,9 @@ const CarManagement = () => {
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [carToDelete, setCarToDelete] = useState<Car | null>(null);
   const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   const pageSize = 10;
-
-  const tableContainerRef = useRef<HTMLDivElement>(null);
-  const isDragging = useRef(false);
-  const startPos = useRef({ x: 0, y: 0 });
-  const scrollPos = useRef({ left: 0, top: 0 });
-
 
   const formatDateTime = (dateString: string) => {
     const options: Intl.DateTimeFormatOptions = {
@@ -80,183 +76,10 @@ const CarManagement = () => {
     maximumFractionDigits: 0,
   }).format(value);
 
-  // Setup drag functionality after data is loaded and component is mounted
-  useEffect(() => {
-    // Wait for next tick to ensure DOM is ready
-    const timer = setTimeout(() => {
-      const container = tableContainerRef.current;
-      if (!container) {
-        console.log('Container still not found after timeout');
-        return;
-      }
-
-      console.log('Setting up drag handlers for container:', container);
-
-      const handleMouseDown = (e: MouseEvent) => {
-        console.log('Mouse down detected on:', e.target);
-        
-        // Skip drag if clicking on interactive elements
-        const target = e.target as HTMLElement;
-        if (
-          target.tagName === 'BUTTON' ||
-          target.tagName === 'INPUT' ||
-          target.tagName === 'IMG' ||
-          target.closest('button') ||
-          target.closest('.swiper') ||
-          target.closest('input') ||
-          target.closest('img')
-        ) {
-          console.log('Skipping drag - interactive element:', target.tagName);
-          return;
-        }
-
-        e.preventDefault();
-        isDragging.current = true;
-        
-        startPos.current = {
-          x: e.clientX,
-          y: e.clientY
-        };
-        
-        scrollPos.current = {
-          left: container.scrollLeft,
-          top: container.scrollTop
-        };
-
-        container.style.cursor = 'grabbing';
-        container.style.userSelect = 'none';
-        
-        console.log('Drag started', { 
-          startPos: startPos.current, 
-          scrollPos: scrollPos.current,
-          target: target.tagName 
-        });
-      };
-
-      const handleMouseMove = (e: MouseEvent) => {
-        if (!isDragging.current) return;
-        
-        e.preventDefault();
-        
-        const deltaX = e.clientX - startPos.current.x;
-        const deltaY = e.clientY - startPos.current.y;
-        
-        container.scrollLeft = scrollPos.current.left - deltaX;
-        container.scrollTop = scrollPos.current.top - deltaY;
-        
-        console.log('Dragging', { deltaX, deltaY, scrollLeft: container.scrollLeft, scrollTop: container.scrollTop });
-      };
-
-      const handleMouseUp = () => {
-        if (isDragging.current) {
-          console.log('Drag ended');
-        }
-        isDragging.current = false;
-        container.style.cursor = 'grab';
-        container.style.userSelect = '';
-      };
-
-      const handleMouseLeave = () => {
-        if (isDragging.current) {
-          console.log('Mouse left container - ending drag');
-        }
-        isDragging.current = false;
-        container.style.cursor = 'grab';
-        container.style.userSelect = '';
-      };
-
-      // Touch events
-      const handleTouchStart = (e: TouchEvent) => {
-        const target = e.target as HTMLElement;
-        if (
-          target.tagName === 'BUTTON' ||
-          target.tagName === 'INPUT' ||
-          target.tagName === 'IMG' ||
-          target.closest('button') ||
-          target.closest('.swiper') ||
-          target.closest('input') ||
-          target.closest('img')
-        ) {
-          return;
-        }
-
-        const touch = e.touches[0];
-        if (!touch) return;
-        
-        isDragging.current = true;
-        
-        startPos.current = {
-          x: touch.clientX,
-          y: touch.clientY
-        };
-        
-        scrollPos.current = {
-          left: container.scrollLeft,
-          top: container.scrollTop
-        };
-        
-        console.log('Touch drag started');
-      };
-
-      const handleTouchMove = (e: TouchEvent) => {
-        if (!isDragging.current) return;
-        
-        e.preventDefault();
-        
-        const touch = e.touches[0];
-        if (!touch) return;
-        
-        const deltaX = touch.clientX - startPos.current.x;
-        const deltaY = touch.clientY - startPos.current.y;
-        
-        container.scrollLeft = scrollPos.current.left - deltaX;
-        container.scrollTop = scrollPos.current.top - deltaY;
-      };
-
-      const handleTouchEnd = () => {
-        if (isDragging.current) {
-          console.log('Touch drag ended');
-        }
-        isDragging.current = false;
-      };
-
-      // Set initial styles
-      container.style.cursor = 'grab';
-
-      // Add event listeners
-      container.addEventListener('mousedown', handleMouseDown);
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-      container.addEventListener('mouseleave', handleMouseLeave);
-
-      container.addEventListener('touchstart', handleTouchStart, { passive: false });
-      container.addEventListener('touchmove', handleTouchMove, { passive: false });
-      container.addEventListener('touchend', handleTouchEnd);
-
-      console.log('Event listeners added successfully');
-
-      // Cleanup function
-      return () => {
-        console.log('Cleaning up event listeners');
-        container.removeEventListener('mousedown', handleMouseDown);
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
-        container.removeEventListener('mouseleave', handleMouseLeave);
-        container.removeEventListener('touchstart', handleTouchStart);
-        container.removeEventListener('touchmove', handleTouchMove);
-        container.removeEventListener('touchend', handleTouchEnd);
-      };
-    }, 100); // Small delay to ensure DOM is ready
-
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [cars]); // Re-run when cars data changes
-
   const fetchCars = async () => {
     setIsLoading(true);
     try {
-      const res = await axios.get('http://localhost:5000/cars');
+      const res = await axios.get(`${API_BASE_URL}/cars`);
       setCars(res.data);
     } catch (err) {
       console.error('Error fetching cars:', err);
@@ -278,10 +101,13 @@ const CarManagement = () => {
     return filtered;
   }, [cars, search]);
 
-  const paginatedCars = useMemo(() => {
-    const start = (page - 1) * pageSize;
-    return filteredCars.slice(start, start + pageSize);
-  }, [filteredCars, page]);
+  const {
+    page,
+    setPage,
+    totalPages,
+    pageItems: paginatedCars,
+    startIndex,
+  } = usePagination(filteredCars, pageSize, search);
 
   const handleView = (car: Car) => {
     setCarToView(car);
@@ -300,7 +126,6 @@ const CarManagement = () => {
 
   return (
     <div className="p-6">
-      <Toaster position="top-right" />
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-semibold">Manajemen Mobil</h2>
         <div className="flex items-center space-x-4">
@@ -309,10 +134,7 @@ const CarManagement = () => {
               type="text"
               placeholder="Cari nama, brand, dll..."
               value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
+              onChange={(e) => setSearch(e.target.value)}
               className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg w-64 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
             />
             <Search className="absolute left-3 top-2.5 text-gray-400" size={20} />
@@ -328,48 +150,37 @@ const CarManagement = () => {
       </div>
 
       {isLoading ? (
-        <p className="text-gray-500">Memuat data mobil...</p>
+        <p className="text-gray-600">Memuat data mobil...</p>
       ) : filteredCars.length === 0 ? (
-        <p className="text-gray-500">Data Mobil tidak ditemukan.</p>
+        <p className="text-gray-600">
+          {search.trim()
+            ? `Tidak ada mobil yang cocok dengan "${search.trim()}".`
+            : 'Belum ada data mobil. Tambahkan lewat tombol Tambah Data Mobil.'}
+        </p>
       ) : (
         <>
-          {/* Drag instruction */}
-          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-            <p className="text-sm text-blue-700">
-              💡 <strong>Tips:</strong> Klik dan seret area kosong tabel (seperti header atau cell kosong) untuk menggulir horizontal/vertikal. Hindari menyeret pada tombol, gambar, atau elemen interaktif.
-            </p>
-          </div>
-
-          <div 
-            ref={tableContainerRef} 
-            className="overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg select-none"
-            style={{ 
-              touchAction: 'none', 
-              maxHeight: '75vh',
-              cursor: 'grab'
-            }}
-          >
-            <table className="min-w-[1500px] bg-white">
-              <thead className="bg-gray-50 sticky top-0 z-10">
+          <ScrollableTable label="Tabel data mobil" dragIgnore=".swiper">
+            <table className="min-w-[1500px] w-full bg-white">
+              <thead className={TABLE_HEAD_CLASS}>
                 <tr>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">No</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Nama Mobil</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Brand</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Tipe</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Transmisi</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Bahan Bakar</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Harian</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Bulanan</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Deposit</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Jumlah Mobil</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Gambar</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Aksi</th>
+                  <Th>#</Th>
+                  <Th>Nama Mobil</Th>
+                  <Th>Brand</Th>
+                  <Th>Tipe</Th>
+                  <Th>Transmisi</Th>
+                  <Th>Bahan Bakar</Th>
+                  <Th align="right">Harian</Th>
+                  <Th align="right">Bulanan</Th>
+                  <Th align="right">Deposit</Th>
+                  <Th align="right">Jumlah Mobil</Th>
+                  <Th>Gambar</Th>
+                  <Th>Aksi</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {paginatedCars.map((car, idx) => (
                   <tr key={car.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 text-sm">{(page - 1) * pageSize + idx + 1}</td>
+                    <td className="px-6 py-4 text-sm text-gray-600 tabular-nums">{startIndex + idx + 1}</td>
                     <td className="px-6 py-4 text-sm">{car.name}</td>
                     <td className="px-6 py-4 text-sm">{car.brand}</td>
                     <td className="px-6 py-4 text-sm">{car.type}</td>
@@ -384,8 +195,8 @@ const CarManagement = () => {
                     <td className="px-6 py-4 text-sm text-right">
                       {car.deposit ? new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(car.deposit) : '-'}
                     </td>
-                    <td className="px-6 py-4 text-sm text-center">{car.quantity}</td>
-                    <td className="px-6 py-4 text-center">
+                    <td className="px-6 py-4 text-sm text-right tabular-nums">{car.quantity}</td>
+                    <td className="px-6 py-4">
                       {(() => {
                         let imageList: string[] = [];
 
@@ -408,19 +219,19 @@ const CarManagement = () => {
                         return imageList.length > 0 ? (
                           <div className="swiper">
                             <Swiper
-                              modules={[Autoplay, Pagination]}
+                              modules={[Autoplay, SwiperPagination]}
                               autoplay={{ delay: 2000, disableOnInteraction: false }}
                               pagination={{ clickable: true }}
                               spaceBetween={5}
                               slidesPerView={1}
-                              className="w-24 h-16 mx-auto rounded custom-swiper"
+                              className="w-24 h-16 rounded custom-swiper"
                             >
                               {imageList.map((img, idx) => (
                                 <SwiperSlide key={idx}>
                                   <img
-                                    src={`http://localhost:5000/uploads/${img}`}
+                                    src={fileUrl(img)}
                                     alt={`Slide ${idx + 1}`}
-                                    onClick={() => setPreviewImage(`http://localhost:5000/uploads/${img}`)}
+                                    onClick={() => setPreviewImage(fileUrl(img) ?? null)}
                                     className="w-full h-full object-cover rounded border cursor-pointer hover:opacity-90 transition"
                                   />
                                 </SwiperSlide>
@@ -433,8 +244,8 @@ const CarManagement = () => {
                       })()}
                     </td>
 
-                    <td className="px-6 py-4 text-sm text-center">
-                      <div className="flex justify-center gap-2">
+                    <td className="px-6 py-4 text-sm">
+                      <div className="flex gap-2">
                         <button
                           onClick={() => handleView(car)}
                           className="text-orange-500 hover:text-orange-600 hover:scale-110 transition-transform"
@@ -442,10 +253,10 @@ const CarManagement = () => {
                         >
                           <Eye size={18} />
                         </button>
-                        <button onClick={() => handleEdit(car)} className="text-blue-500 hover:text-blue-700 hover:scale-110 transition-transform">
+                        <button onClick={() => handleEdit(car)} title="Ubah" aria-label={`Ubah ${car.name}`} className="text-blue-500 hover:text-blue-700 hover:scale-110 transition-transform">
                           <Pencil size={18} />
                         </button>
-                        <button onClick={() => handleDeleteClick(car)} className="text-red-500 hover:text-red-700 hover:scale-110 transition-transform">
+                        <button onClick={() => handleDeleteClick(car)} title="Hapus" aria-label={`Hapus ${car.name}`} className="text-red-500 hover:text-red-700 hover:scale-110 transition-transform">
                           <Trash size={18} />
                         </button>
                       </div>
@@ -454,56 +265,19 @@ const CarManagement = () => {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollableTable>
 
-          {previewImage && (
-            <div
-              className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70"
-              onClick={() => setPreviewImage(null)}
-            >
-              <img
-                src={previewImage}
-                alt="Preview"
-                className="max-w-3xl max-h-[80vh] rounded shadow-lg border-4 border-white"
-                onClick={(e) => e.stopPropagation()}
-              />
-            </div>
-          )}
+          <ImageDialog src={previewImage} alt="Gambar mobil" onClose={() => setPreviewImage(null)} />
 
-          <div className="flex items-center justify-between mt-4">
-            <div className="text-sm text-gray-600">
-              Menampilkan {paginatedCars.length} dari {filteredCars.length} data mobil
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setPage(page - 1)}
-                disabled={page === 1}
-                className={`px-3 py-1 rounded border border-gray-300 text-gray-700 bg-white hover:bg-gray-100 ${
-                  page === 1 ? 'opacity-50 cursor-allowed' : ''
-                }`}
-              >
-                «
-              </button>
-              {Array.from({ length: Math.ceil(filteredCars.length / pageSize) }, (_, i) => (
-                <button
-                  key={i}
-                  onClick={() => setPage(i + 1)}
-                  className={`px-3 py-1 rounded ${
-                    page === i + 1 ? 'bg-orange-500 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-100'
-                  }`}
-                >
-                  {i + 1}
-                </button>
-              ))}
-              <button
-                onClick={() => setPage(page + 1)}
-                disabled={page >= Math.ceil(filteredCars.length / pageSize)}
-                className="px-3 py-1 rounded bg-white text-gray-700 border border-gray-300 hover:bg-gray-100 disabled:opacity-50"
-              >
-                »
-              </button>
-            </div>
-          </div>
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            totalItems={filteredCars.length}
+            pageCount={paginatedCars.length}
+            startIndex={startIndex}
+            onPageChange={setPage}
+            itemLabel="data mobil"
+          />
         </>
       )}
 
@@ -527,17 +301,8 @@ const CarManagement = () => {
         })();
 
         return (
-          <div
-            className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center"
-            onClick={() => setCarToView(null)}
-          >
-            <div
-              className="bg-white relative rounded-xl p-6 max-w-xl w-full shadow-2xl border border-gray-200"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="text-2xl font-bold mb-4 text-black-600">Detail Mobil</h3>
-
-              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm text-gray-800">
+          <Modal open onClose={() => setCarToView(null)} title="Detail Mobil" size="md">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm text-gray-800">
                 <p><strong>Nama Mobil:</strong> {carToView.name}</p>
                 <p><strong>Brand:</strong> {carToView.brand}</p>
                 <p><strong>Tipe Mobil:</strong> {carToView.type}</p>
@@ -619,45 +384,28 @@ const CarManagement = () => {
                   <h4 className="text-sm font-semibold text-gray-600 mb-2">Gambar Mobil:</h4>
                   <div className="grid grid-cols-2 gap-2">
                     {images.map((img: string, idx: number) => (
-                      <img
+                      <button
                         key={idx}
-                        src={`http://localhost:5000/uploads/${img}`}
-                        alt={`Preview ${idx + 1}`}
-                        className="w-full h-32 object-cover rounded border cursor-pointer hover:opacity-80 transition"
-                        onClick={() => setPreviewImageUrl(`http://localhost:5000/uploads/${img}`)}
-                      />
+                        type="button"
+                        onClick={() => setPreviewImageUrl(fileUrl(img) ?? null)}
+                        aria-label={`Perbesar gambar ${idx + 1}`}
+                        className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-700 focus-visible:ring-offset-2"
+                      >
+                        <img
+                          src={fileUrl(img)}
+                          alt={`Preview ${idx + 1}`}
+                          className="w-full h-32 object-cover rounded border hover:opacity-80 transition"
+                        />
+                      </button>
                     ))}
                   </div>
                 </div>
               )}
 
-              <div className="mt-6 text-right">
-                <button
-                  onClick={() => setCarToView(null)}
-                  className="absolute top-4 right-4 text-gray-500 text-xl font-bold"
-                  aria-label="Close"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-          </div>
+              <ImageDialog src={previewImageUrl} alt={`Gambar ${carToView.name}`} onClose={() => setPreviewImageUrl(null)} />
+          </Modal>
         );
       })()}
-
-      {previewImageUrl && (
-        <div
-          className="fixed inset-0 z-[60] bg-black bg-opacity-70 flex items-center justify-center"
-          onClick={() => setPreviewImageUrl(null)}
-        >
-          <img
-            src={previewImageUrl}
-            alt="Preview"
-            className="max-w-3xl max-h-[90vh] object-contain rounded shadow-2xl border-4 border-white"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      )}
 
       {/* Modal Tambah Mobil */}
       <CarFormModal
@@ -687,33 +435,23 @@ const CarManagement = () => {
       )}
 
       {/* Modal Hapus Mobil */}
-      {carToDelete && (
-        <DeleteCarModal
-          carName={carToDelete.name}
-          isOpen={true}
-          isDeleting={isDeleting}
-          onCancel={() => setCarToDelete(null)}
-          onConfirm={async () => {
-            setIsDeleting(true);
-            try {
-              await axios.delete(`http://localhost:5000/cars/${carToDelete.id}`, {
-                data: { 
-                  user_id: user?.id,
-                  username: user?.username,
-                }
-              });
-              toast.success("Data Mobil sudah dihapus!");
-              fetchCars();
-            } catch (error) {
-              console.error(error);
-              toast.error("Gagal menghapus data mobil");
-            } finally {
-              setCarToDelete(null);
-              setIsDeleting(false);
-            }
-          }}
-        />
-      )}
+      <DeleteCarModal
+        carName={carToDelete?.name ?? ''}
+        isOpen={!!carToDelete}
+        onCancel={() => setCarToDelete(null)}
+        onConfirm={async () => {
+          if (!carToDelete) return;
+          try {
+            await axios.delete(`${API_BASE_URL}/cars/${carToDelete.id}`);
+            notifySuccess('Mobil berhasil dihapus.');
+            fetchCars();
+          } catch (error) {
+            console.error(error);
+            notifyError(error, 'Mobil gagal dihapus');
+          }
+        }}
+      />
+
     </div>
   );
 };

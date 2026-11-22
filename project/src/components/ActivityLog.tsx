@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Search, FileDown } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
+// Export only. xlsx 0.18.5 has unfixed parse-side advisories (GHSA-4r6h-8v6p-xvw6 prototype
+// pollution, GHSA-5pgg-2g8v-p4x9 ReDoS): never call XLSX.read or sheet_to_* on a user-supplied file.
 import * as XLSX from 'xlsx';
 
 interface LogItem {
@@ -17,7 +19,9 @@ interface LogItem {
 }
 
 
-const renderKeyValueIndented = (obj: Record<string, any>) => {
+const API_BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
+
+const renderKeyValueIndented =(obj: Record<string, any>) => {
   return Object.entries(obj).map(([key, value]) => (
     <div key={key} className="ml-4">
       <span className="font-mono">{key}</span>: {String(value)}
@@ -35,8 +39,11 @@ const ActivityLog: React.FC = () => {
   const [endDate, setEndDate] = useState<Date | null>(null);
 
   useEffect(() => {
-    fetch('http://localhost:5000/history-logs') // sesuaikan jika URL beda
-      .then((res) => res.json())
+    fetch(`${API_BASE_URL}/history-logs`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
       .then((data) => setLogs(data))
       .catch((err) => console.error('Error fetching logs:', err));
   }, []);

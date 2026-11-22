@@ -1,0 +1,126 @@
+# ARMJ rentcar. Run every command from this folder (deploy/).
+# Secrets and settings come from deploy/.env (copied from .env.production.example).
+# Compose reads deploy/.env for ${...} interpolation, and the app reads it again via env_file.
+name: rentcar
+
+services:
+  postgres:
+    image: postgres:18.7-trixie@sha256:eb63372c1e05c755f55fa30cbd07aecc443676fc6c0fa90b9002d01537841e1a
+    restart: unless-stopped
+    # Superuser: owner of every table, used for migrations, restore and backup.sh. Not given to the app.
+    environment:
+      POSTGRES_USER: ${DB_USER:?DB_USER is required in deploy/.env}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required in deploy/.env}
+      POSTGRES_DB: ${DB_NAME:?DB_NAME is required in deploy/.env}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=512MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_connections=50
+    # postgres:18 sets PGDATA=/var/lib/postgresql/18/docker and declares VOLUME /var/lib/postgresql.
+    # Same mount as the other postgres:18 containers on this host.
+    volumes:
+      - pgdata:/var/lib/postgresql
+    shm_size: 128m
+    mem_limit: 1g
+    memswap_limit: 1g
+    # The entrypoint starts as root, fixes ownership of the data dir, then drops to the postgres user
+    # with gosu. These five capabilities are what that needs; nothing else.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    stop_grace_period: 30s
+    # No published port. For psql from the host, use `docker compose exec postgres psql`.
+    # If a host port is really needed, add `ports: ["127.0.0.1:5434:5432"]` and move this
+    # service to the `egress` network as well (internal networks cannot publish ports).
+    networks:
+      - db
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: runtime
+    image: rentcar-app:${APP_TAG:?APP_TAG is required in deploy/.env}
+    restart: unless-stopped
+    env_file:
+      - .env
+    # Fixed by the deploy, override anything in .env.
+    environment:
+      NODE_ENV: production
+      PORT: "5005"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      # Least-privilege role from DB/17 (no DDL, BYPASSRLS). Overrides DB_USER/DB_PASSWORD from
+      # env_file, so the superuser password never reaches the app container.
+      DB_USER: ${APP_DB_USER:?APP_DB_USER is required in deploy/.env}
+      DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD is required in deploy/.env}
+      UPLOAD_DIR: /data/uploads
+      NODE_OPTIONS: --max-old-space-size=384
+    ports:
+      - "127.0.0.1:5005:5005"
+    volumes:
+      - uploads:/data/uploads
+    # Root filesystem read-only. The app writes only to /data/uploads (volume); /tmp is a small
+    # tmpfs for anything that uses os.tmpdir().
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 512m
+    memswap_limit: 512m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5005/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # db: reach postgres. egress: outbound SMTP to Gmail and the published 127.0.0.1 port.
+    networks:
+      - db
+      - egress
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  db:
+    internal: true
+  egress: {}
+
+volumes:
+  pgdata: {}
+  uploads: {}

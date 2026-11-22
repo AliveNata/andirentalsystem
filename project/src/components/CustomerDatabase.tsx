@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react';
-// import { supabase } from '../lib/supabaseClient';
-import { Eye, Edit2, Search, Clock, Trash2, AlertCircle, Repeat } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Eye, Edit2, Search, Clock, Trash2, Repeat, FileText } from 'lucide-react';
 import PhoneInput from 'react-phone-input-2';
 import 'react-phone-input-2/lib/style.css';
 import toast from 'react-hot-toast';
@@ -8,6 +7,28 @@ import CustomerBookingForm from './CustomerBookingForm';
 import TermsAndConditions from './TermsAndConditions';
 import BookingConfirmation from './BookingConfirmation';
 import { getDocumentsToShowByIdentityType } from '../utils/documentutils';
+import { fileUrl } from '../lib/fileUrl';
+import { isGuardedStatus, notifyError, notifyResponseError, notifySuccess } from '../lib/notify';
+import { computeTotals } from '../lib/pricing.mjs';
+import { isPdfFile, readServerError } from '../types';
+import Pagination from './ui/Pagination';
+import { ScrollableTable, TABLE_HEAD_CLASS, TableMessageRow, Th } from './ui/DataTable';
+import { usePagination } from '../lib/usePagination';
+import { ConfirmDialog, ImageDialog, Modal, ModalButton } from './ui/Modal';
+
+// Browsers cannot render a PDF inside <img>, so PDFs open in a new tab instead of a thumbnail.
+const PdfTile: React.FC<{ href?: string; label: string; className?: string }> = ({ href, label, className = '' }) => (
+  <a
+    href={href}
+    target="_blank"
+    rel="noopener noreferrer"
+    aria-label={`Buka PDF ${label} di tab baru`}
+    className={`flex flex-col items-center justify-center gap-1 rounded-lg border border-gray-300 bg-gray-50 text-orange-700 hover:bg-orange-50 hover:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 ${className}`}
+  >
+    <FileText size={28} aria-hidden="true" />
+    <span className="text-sm font-semibold underline">Buka PDF</span>
+  </a>
+);
 
 
 
@@ -53,7 +74,13 @@ interface HistoryLog {
   created_at: string;
 }
 
-const CustomerDatabase: React.FC = () => {
+interface CustomerDatabaseProps {
+  // Opens the Reorder dialog for this customer once the list has loaded (sent from the booking form warning).
+  initialReorderCustomerId?: string | null;
+  onInitialReorderHandled?: () => void;
+}
+
+const CustomerDatabase: React.FC<CustomerDatabaseProps> = ({ initialReorderCustomerId, onInitialReorderHandled }) => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [historyLogs, setHistoryLogs] = useState<HistoryLog[]>([]);
@@ -61,11 +88,10 @@ const CustomerDatabase: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [deleteReason, setDeleteReason] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editedCustomer, setEditedCustomer] = useState<Customer | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 20;
+  const itemsPerPage = 10;
   const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
   const [modalMode, setModalMode] = useState<'detail' | 'reorder' | null>(null); 
@@ -74,7 +100,9 @@ const CustomerDatabase: React.FC = () => {
   const [reorderFormData, setReorderFormData] = useState<any>(null);
 
   const [showConfirmationModal, setShowConfirmationModal] = useState(false);
-  const [bookingCode, setBookingCode] = useState('');
+  const [isReorderSubmitting, setIsReorderSubmitting] = useState(false);
+  // Synchronous guard: a second click can arrive before isReorderSubmitting re-renders the button.
+  const reorderLock = useRef(false);
   const [transactionList, setTransactionList] = useState<any[]>([]);
   const [selectedTransactionList, setSelectedTransactionList] = useState<any[]>([]);
   const [showTransactionModal, setShowTransactionModal] = useState(false);
@@ -203,15 +231,6 @@ const CustomerDatabase: React.FC = () => {
   // };
 
 
-  const generateBookingCode = () => {
-  const date = new Date();
-  const uniqueId = Math.random().toString(36).substring(2, 8).toUpperCase();
-  const year = date.getFullYear().toString().slice(-2);
-  const month = (date.getMonth() + 1).toString().padStart(2, '0');
-  const day = date.getDate().toString().padStart(2, '0');
-  return `ARMJ${year}${month}${day}${uniqueId}`;
-};
-
   const [documentFiles, setDocumentFiles] = useState<Record<string, File>>({});
 
 const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputElement>) => {
@@ -222,10 +241,10 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
 
 
   
-  const handleDelete = async () => {
-    if (!selectedCustomer || !deleteReason.trim()) return;
+  const handleDelete = async (reason: string) => {
+    if (!selectedCustomer) return;
 
-    const user = JSON.parse(localStorage.getItem('user') || '{}'); // ✅ Tambahin baris ini
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
 
     try {
       const response = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/customer/delete/${selectedCustomer.id}`, {
@@ -233,26 +252,26 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
-          reason: deleteReason,
-          user_id: user?.id, 
+        body: JSON.stringify({
+          reason,
+          user_id: user?.id,
           username: user?.username,
           }),
         });
-  
-      if (!response.ok) throw new Error('Gagal menghapus data');
-  
-      // Refresh data
+
+      if (!response.ok) {
+        await notifyResponseError(response, 'Customer gagal dihapus');
+        return;
+      }
+
       fetchCustomers();
-      toast.success('Data customer berhasil dihapus.');
-      setShowDeleteModal(false);
-      setDeleteReason('');
+      notifySuccess('Customer berhasil dihapus.');
       setSelectedCustomer(null);
     } catch (error) {
       console.error('Error deleting customer:', error);
-      toast.error('Terjadi kesalahan saat menghapus data.');
+      notifyError(error, 'Customer gagal dihapus');
     }
-  };  
+  };
 
   const filteredCustomers = customers.filter(customer => {
     const searchLower = searchTerm.toLowerCase();
@@ -266,6 +285,7 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
   const handleSaveEdit = async () => {
   if (!editedCustomer || !selectedCustomer) return;
 
+  setIsSavingEdit(true);
   try {
     const formData = new FormData();
 
@@ -293,9 +313,12 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
       body: formData,
     });
 
-    if (!response.ok) throw new Error('Gagal menyimpan data');
+    if (!response.ok) {
+      await notifyResponseError(response, 'Customer gagal diperbarui');
+      return;
+    }
 
-    toast.success('Data customer berhasil diperbarui.');
+    notifySuccess('Customer berhasil diperbarui.');
 
     // ✅ Refresh data dan close modal
     await fetchCustomers();
@@ -317,9 +340,25 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
 
   } catch (error) {
     console.error('Error updating customer:', error);
-    toast.error('Terjadi kesalahan saat menyimpan data.');
+    notifyError(error, 'Customer gagal diperbarui');
+  } finally {
+    setIsSavingEdit(false);
   }
 };
+
+  const closeEditModal = () => {
+    setShowEditModal(false);
+    setEditedCustomer(null);
+    setDocumentFiles({});
+    if (selectedCustomer?.id) fetchHistoryLogs(selectedCustomer.id);
+  };
+
+  const closeDetailModal = () => {
+    setSelectedCustomer(null);
+    setModalMode(null);
+    setHistoryLogs([]);
+    setHistoryPage(1);
+  };
 
 
   const formatIdentityType = (type: string) => {
@@ -375,12 +414,25 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
     }
   };
 
-  const paginatedCustomers = filteredCustomers.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  );
+  const {
+    page: currentPage,
+    setPage: setCurrentPage,
+    totalPages,
+    pageItems: paginatedCustomers,
+    startIndex,
+  } = usePagination(filteredCustomers, itemsPerPage, searchTerm);
 
-  const totalPages = Math.ceil(filteredCustomers.length / itemsPerPage);
+  useEffect(() => {
+    if (!initialReorderCustomerId || loading) return;
+    const target = customers.find((c) => c.id === initialReorderCustomerId);
+    if (target) {
+      setSelectedCustomer(target);
+      setModalMode('reorder');
+    } else {
+      toast.error('Customer tidak ditemukan di Database Customer. Mungkin sudah dihapus.');
+    }
+    onInitialReorderHandled?.();
+  }, [initialReorderCustomerId, loading, customers, onInitialReorderHandled]);
 
     useEffect(() => {
     if (selectedCustomer?.payment_proof) {
@@ -409,35 +461,29 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500"></div>
         </div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full bg-white rounded-lg overflow-hidden shadow-lg">
-            <thead className="bg-gray-50">
+        <ScrollableTable label="Tabel database customer">
+          <table className="min-w-full bg-white">
+            <thead className={TABLE_HEAD_CLASS}>
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Nama
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Email
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Whatsapp
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Tipe Identitas
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Terakhir Diubah
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Transaksi
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Aksi
-                </th>
+                <Th>#</Th>
+                <Th>Nama</Th>
+                <Th>Email</Th>
+                <Th>Whatsapp</Th>
+                <Th>Tipe Identitas</Th>
+                <Th>Terakhir Diubah</Th>
+                <Th align="right">Transaksi</Th>
+                <Th>Aksi</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {filteredCustomers.map((customer) => {
+              {paginatedCustomers.length === 0 && (
+                <TableMessageRow colSpan={8}>
+                  {searchTerm.trim()
+                    ? `Tidak ada customer yang cocok dengan "${searchTerm.trim()}".`
+                    : 'Belum ada data customer. Customer baru muncul di sini setelah booking pertama disimpan.'}
+                </TableMessageRow>
+              )}
+              {paginatedCustomers.map((customer, idx) => {
                 const transactionCount = transactionList.filter((trx) => {
                 const trxKey = `${trx.email?.toLowerCase().trim()}|${trx.identity_type?.toLowerCase().trim()}`;
                 const custKey = `${customer.email?.toLowerCase().trim()}|${customer.identity_type?.toLowerCase().trim()}`;
@@ -446,6 +492,9 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
                 
               return (
                 <tr key={customer.id} className="hover:bg-gray-50">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 tabular-nums">
+                    {startIndex + idx + 1}
+                  </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                     {customer.name}
                   </td>
@@ -461,11 +510,15 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {formatDateTime(customer.created_at)}
                   </td>
-                  <td
-                    className="px-6 py-4 whitespace-nowrap text-sm text-black-600 font-bold hover:underline cursor-pointer text-selection-safe"
-                    onClick={() => handleShowTransactions(customer)}
-                  >
-                    {transactionCount}
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-right">
+                    <button
+                      type="button"
+                      onClick={() => handleShowTransactions(customer)}
+                      aria-label={`Lihat ${transactionCount} transaksi ${customer.name}`}
+                      className="font-bold tabular-nums text-gray-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-700 rounded text-selection-safe"
+                    >
+                      {transactionCount}
+                    </button>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     <div className="flex space-x-2">
@@ -523,120 +576,52 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
               
             </tbody>
           </table>
-        </div>
+        </ScrollableTable>
       )}
-      {/* ✅ Pagination */}
-<div className="flex justify-between items-center mt-4">
-  <p className="text-sm text-gray-600">
-    Menampilkan {paginatedCustomers.length} dari {filteredCustomers.length} data
-  </p>
-  <div className="flex space-x-1 flex-wrap">
-    {/* Tombol Sebelumnya */}
-    <button
-      onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
-      disabled={currentPage === 1}
-      className="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-50"
-    >
-      &laquo;
-    </button>
-
-    {/* Tombol Halaman */}
-    {(() => {
-      const pages = [];
-      const current = currentPage;
-      const total = totalPages;
-
-      const showLeftEllipsis = current > 6;
-      const showRightEllipsis = current < total - 5;
-
-      const startPage = showLeftEllipsis ? Math.max(current - 4, 2) : 2;
-      const endPage = showRightEllipsis ? Math.min(current + 4, total - 1) : total - 1;
-
-      // Page 1
-      pages.push(
-        <button
-          key={1}
-          onClick={() => setCurrentPage(1)}
-          className={`px-3 py-1 border rounded ${current === 1 ? 'bg-orange-500 text-white' : 'hover:bg-gray-100'}`}
-        >
-          1
-        </button>
-      );
-
-      // Ellipsis kiri
-      if (showLeftEllipsis) {
-        pages.push(<span key="left-ellipsis" className="px-2">...</span>);
-      }
-
-      // Middle page range
-      for (let i = startPage; i <= endPage; i++) {
-        pages.push(
-          <button
-            key={i}
-            onClick={() => setCurrentPage(i)}
-            className={`px-3 py-1 border rounded ${current === i ? 'bg-orange-500 text-white' : 'hover:bg-gray-100'}`}
-          >
-            {i}
-          </button>
-        );
-      }
-
-      // Ellipsis kanan
-      if (showRightEllipsis) {
-        pages.push(<span key="right-ellipsis" className="px-2">...</span>);
-      }
-
-      // Page terakhir
-      if (total > 1) {
-        pages.push(
-          <button
-            key={total}
-            onClick={() => setCurrentPage(total)}
-            className={`px-3 py-1 border rounded ${current === total ? 'bg-orange-500 text-white' : 'hover:bg-gray-100'}`}
-          >
-            {total}
-          </button>
-        );
-      }
-
-      return pages;
-    })()}
-
-    {/* Tombol Selanjutnya */}
-    <button
-      onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
-      disabled={currentPage === totalPages}
-      className="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-50"
-    >
-      &raquo;
-    </button>
-  </div>
-</div>
+      {!loading && (
+        <Pagination
+          page={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredCustomers.length}
+          pageCount={paginatedCustomers.length}
+          startIndex={startIndex}
+          onPageChange={setCurrentPage}
+          itemLabel="customer"
+        />
+      )}
 
       {/* Customer Detail Modal */}
       {selectedCustomer && (modalMode === 'detail' || modalMode === 'reorder') && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-2xl font-semibold text-selection-safe">
-                  {modalMode === 'reorder' ? 'Reorder Customer' : 'Detail Customer'}
-                </h3>
-                <button
+        <Modal
+          open
+          onClose={closeDetailModal}
+          title={modalMode === 'reorder' ? 'Reorder Customer' : 'Detail Customer'}
+          size="xl"
+          footer={
+            modalMode === 'reorder' ? (
+              <>
+                <ModalButton
                   onClick={() => {
-                    if (selectedCustomer?.id) {
-                      fetchHistoryLogs(selectedCustomer.id); // ✅ fetch ulang log
-                    }
-                    setSelectedCustomer(null);
-                    setHistoryLogs([]);
-                    setHistoryPage(1);;
+                    setModalMode(null);
+                    setShowEditModal(true);
+                    setEditedCustomer({ ...selectedCustomer });
                   }}
-                  className="text-gray-500 hover:text-gray-700"
                 >
-                  ✕
-                </button>
-              </div>
-
+                  Edit
+                </ModalButton>
+                <ModalButton
+                  variant="primary"
+                  onClick={() => {
+                    setModalMode(null);
+                    setShowReorderForm(true);
+                  }}
+                >
+                  Lanjutkan Order
+                </ModalButton>
+              </>
+            ) : undefined
+          }
+        >
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-4">
                   <div>
@@ -671,14 +656,17 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
                           return (
                             <div key={key} className="space-y-2">
                               <p className="text-sm text-gray-600">{documentLabels[key] || key}</p>
+                              {isPdfFile(value) ? (
+                                <PdfTile href={fileUrl(value)} label={documentLabels[key] || key} className="w-full h-32" />
+                              ) : (
                               <div className="relative group">
                                 <img
-                                  src={`${import.meta.env.VITE_API_PUBLIC_URL || ""}/uploads/${value}`}
+                                  src={fileUrl(value)}
                                   alt={key}
                                   className="w-full h-32 object-cover rounded-lg"
                                 />
                                 <a
-                                  href={`${import.meta.env.VITE_API_PUBLIC_URL || ""}/uploads/${value}`}
+                                  href={fileUrl(value)}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-200"
@@ -686,6 +674,7 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
                                   <span className="text-white text-sm">Klik untuk memperbesar</span>
                                 </a>
                               </div>
+                              )}
                             </div>
                           );
                         })}
@@ -735,36 +724,6 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
                       </div>
                     )}
                   </div>
-
-                  {modalMode === 'reorder' && (
-                    <div className="w-full mt-8 border-t pt-4 flex justify-end">
-                    <div className="flex space-x-3">
-                      <button
-                        onClick={() => {
-                          setModalMode(null);
-                          setShowEditModal(true);
-                          setEditedCustomer({ ...selectedCustomer! });
-                          setSelectedCustomer(selectedCustomer);
-                        }}
-                        className="px-4 py-2 rounded bg-blue-500 text-white"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => {
-                          setModalMode(null);
-                          setShowReorderForm(true);
-                          setSelectedCustomer(selectedCustomer);
-                        }}
-                        className="px-4 py-2 rounded bg-orange-500 text-white"
-                      >
-                        Lanjutkan Order
-                      </button>
-                    </div>
-                  </div>
-                  )}
-
-
                   </div>
 
                   {/* History Log Section */}
@@ -848,29 +807,26 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
                   )}
                 </div>
               </div>
-            </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
                       {/* Edit Modal */}
                       {showEditModal && editedCustomer && (
-                  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-                    <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-                      <div className="p-6">
-                        <div className="flex justify-between items-center mb-6">
-                          <h3 className="text-2xl font-semibold text-selection-safe">Edit Data Customer</h3>
-                          <button
-                            onClick={() => {
-                              setShowEditModal(false);
-                              setEditedCustomer(null);
-                            }}
-                            className="text-gray-500 hover:text-gray-700"
-                          >
-                            ✕
-                          </button>
-                        </div>
-
+                  <Modal
+                    open
+                    onClose={closeEditModal}
+                    title="Edit Data Customer"
+                    size="lg"
+                    busy={isSavingEdit}
+                    footer={
+                      <>
+                        <ModalButton onClick={closeEditModal} disabled={isSavingEdit}>Batal</ModalButton>
+                        <ModalButton variant="primary" onClick={handleSaveEdit} busy={isSavingEdit} busyLabel="Menyimpan...">
+                          Simpan
+                        </ModalButton>
+                      </>
+                    }
+                  >
                         <div className="space-y-4">
                           {/* Tipe Identitas */}
                           <div>
@@ -1043,17 +999,20 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
                       <label className="block text-sm font-medium text-gray-700 mb-1 ">{label}</label>
 
                       {/* Preview jika ada dokumen sebelumnya */}
-                      {selectedCustomer?.documents?.[key] && (
+                      {selectedCustomer?.documents?.[key] && isPdfFile(selectedCustomer.documents[key]) && (
+                        <PdfTile href={fileUrl(selectedCustomer.documents[key])} label={label} className="mb-2 w-40 h-28" />
+                      )}
+                      {selectedCustomer?.documents?.[key] && !isPdfFile(selectedCustomer.documents[key]) && (
                         <div className="relative group mb-2 w-40 h-28 rounded-lg overflow-hidden shadow">
                           <img
-                            src={`${import.meta.env.VITE_API_PUBLIC_URL || ''}/uploads/${selectedCustomer.documents[key]}`}
+                            src={fileUrl(selectedCustomer.documents[key])}
                             alt={label}
                             className="w-full h-full object-cover "
                           />
                           <button
                             type="button"
                             onClick={() =>
-                              setPreviewImage(`${import.meta.env.VITE_API_PUBLIC_URL || ''}/uploads/${selectedCustomer.documents[key]}`)
+                              setPreviewImage(fileUrl(selectedCustomer.documents[key]) ?? null)
                             }
                             className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition duration-200"
                           >
@@ -1064,7 +1023,7 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
 
                       <input
                         type="file"
-                        accept="image/*,application/pdf"
+                        accept=".jpg,.jpeg,.png,.pdf"
                         onChange={(e) => handleDocumentFileChange(key, e)}
                         className="w-full border border-gray-300 rounded-lg p-2 text-selection-safe"
                       />
@@ -1072,107 +1031,26 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
                   ));
                 })()}
                 </div>
-
-
-
-                <div className="flex justify-end space-x-3">
-                  <button
-                    onClick={() => {
-                      setShowEditModal(false);
-                      if (selectedCustomer?.id) fetchHistoryLogs(selectedCustomer.id);
-                    }}
-                    className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-                  >
-                    Batal
-                  </button>
-                  <button
-                    onClick={handleSaveEdit}
-                    className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Simpan
-                  </button>
-                </div>
               </div>
-            </div>
-          </div>
-        </div>
+
+              <ImageDialog src={previewImage} alt="Dokumen customer" onClose={() => setPreviewImage(null)} />
+        </Modal>
       )}
 
-      {/* Delete Confirmation Modal */}
-      {showDeleteModal && selectedCustomer && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full">
-            <div className="p-6">
-              <div className="flex items-center mb-6 text-red-600">
-                <AlertCircle size={24} className="mr-2" />
-                <h3 className="text-xl font-semibold">Konfirmasi Penghapusan</h3>
-              </div>
-
-              <div className="space-y-4">
-                <p className="text-gray-600">
-                  Anda akan menghapus data customer dengan nama {' '}
-                  <span className="font-semibold">{selectedCustomer.name}</span>
-                  {' '} dan email:{' '}
-                  <span className="font-semibold">{selectedCustomer.email}</span>
-                </p>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Alasan Penghapusan <span className="text-red-500">*</span>
-                  </label>
-                  <textarea
-                    value={deleteReason}
-                    onChange={(e) => setDeleteReason(e.target.value)}
-                    className="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-red-500/50 focus:border-red-500"
-                    rows={3}
-                    placeholder="Masukkan alasan penghapusan data customer..."
-                    required
-                  />
-                </div>
-
-                <div className="flex justify-end space-x-3">
-                  <button
-                    onClick={() => {
-                      setShowDeleteModal(false);
-                      setDeleteReason('');
-                    }}
-                    className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-                  >
-                    Batal
-                  </button>
-                  <button
-                    onClick={handleDelete}
-                    disabled={!deleteReason.trim()}
-                    className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Hapus
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-
-
-        {previewImage && (
-          <div
-            className="fixed inset-0 z-50 bg-black bg-opacity-70 flex items-center justify-center"
-            onClick={() => setPreviewImage(null)} // klik luar menutup
-          >
-            <div
-              className="relative max-w-3xl w-full px-4"
-              onClick={(e) => e.stopPropagation()} // cegah close saat klik gambar
-            >
-              <img
-                src={previewImage}
-                alt="Preview"
-                className="w-full rounded-lg shadow-lg"
-              />
-            </div>
-          </div>
-        )}
+      <ConfirmDialog
+        open={showDeleteModal && !!selectedCustomer}
+        onClose={() => setShowDeleteModal(false)}
+        title="Hapus customer?"
+        description={
+          <>
+            Customer <span className="font-semibold text-gray-900">{selectedCustomer?.name}</span> ({selectedCustomer?.email})
+            akan dihapus dari daftar. Alasannya tercatat di riwayat perubahan.
+          </>
+        }
+        confirmLabel="Hapus customer"
+        reason={{ label: 'Alasan penghapusan', placeholder: 'Contoh: data ganda dengan customer lain' }}
+        onConfirm={handleDelete}
+      />
 
         {showReorderForm && selectedCustomer && (
           <CustomerBookingForm
@@ -1194,13 +1072,20 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
           />
         )}
 
-        {showTermsModal && (
-          <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6">
-            <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        {/* Closing a later reorder step goes back to the form, so the data typed there survives. */}
+        <Modal
+          open={showTermsModal}
+          onClose={() => {
+            setShowTermsModal(false);
+            setShowReorderForm(true);
+          }}
+          title="Reorder: syarat dan ketentuan"
+          size="lg"
+          bodyClassName="p-0 sm:p-0"
+        >
               <TermsAndConditions
                 onAccept={() => {
                   setShowTermsModal(false);
-                  setBookingCode(generateBookingCode());
                   setShowConfirmationModal(true);
                   // kirim ke API atau lanjut
                 }}
@@ -1210,36 +1095,50 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
                   // if (!selectedCustomer) setSelectedCustomer(editedCustomer);
                 }}
               />
-            </div>
-          </div>
-        )}
-
+        </Modal>
 
         {showConfirmationModal && reorderFormData && selectedCustomer && (
-          <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex justify-center items-center p-4">
-            <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6">
+          <Modal
+            open
+            onClose={() => {
+              setShowConfirmationModal(false);
+              setShowReorderForm(true);
+            }}
+            title="Reorder: konfirmasi booking"
+            size="xl"
+            busy={isReorderSubmitting}
+            bodyClassName="p-0 sm:p-0"
+          >
               <BookingConfirmation
                 formData={reorderFormData}
                 identityData={selectedCustomer}
-                bookingCode={bookingCode}
                 onBack={() => {
                   setShowConfirmationModal(false);
                   setShowReorderForm(true);
                 }}
+                isSubmitting={isReorderSubmitting}
                 onSubmit={async () => {
+                if (reorderLock.current) return;
+                reorderLock.current = true;
+                setIsReorderSubmitting(true);
                 try {
-                  const user = JSON.parse(localStorage.getItem("user") || "{}");
+                  const totals = computeTotals({
+                    rental_cost: reorderFormData.rentalCost,
+                    deposit: reorderFormData.deposit,
+                    discount: reorderFormData.discount,
+                    needs_trip: reorderFormData.needsTrip,
+                    needs_driver: reorderFormData.needsDriver,
+                    needs_delivery: reorderFormData.needsDelivery,
+                    needs_pickup: reorderFormData.needsPickup,
+                    trip_fee: Number.isFinite(reorderFormData.tripFee) ? reorderFormData.tripFee : 0,
+                    driver_fee: Number.isFinite(reorderFormData.driverFee) ? reorderFormData.driverFee : 0,
+                    delivery_fee: Number.isFinite(reorderFormData.deliveryFee) ? reorderFormData.deliveryFee : 0,
+                    pickup_fee: Number.isFinite(reorderFormData.pickupFee) ? reorderFormData.pickupFee : 0,
+                  });
 
-                  console.log("🔥 ReorderFormData:", reorderFormData); // ⬅️ TARUH DI SINI
-                  console.log("💰 Grand Total:", reorderFormData.grandTotal);
-
+                  // Spec 3.4: customer_id is required. grand_total and booking_code come from the server.
                   const transactionPayload = {
-                    ...reorderFormData,
                     customer_id: selectedCustomer.id,
-                    booking_code: bookingCode,
-                    username: user.username,
-                    user_id: user.id,
-                    created_at: new Date().toISOString(),
 
                     name: reorderFormData.name,
                     address: selectedCustomer.address,
@@ -1247,7 +1146,6 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
                     email: reorderFormData.email,
                     whatsapp: reorderFormData.whatsapp,
                     identity_type: reorderFormData.identityType,
-
 
                     car_type: reorderFormData.carType,
                     rental_duration: reorderFormData.rentalDuration,
@@ -1261,19 +1159,18 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
                     needs_delivery: reorderFormData.needsDelivery,
                     needs_pickup: reorderFormData.needsPickup,
 
-                    grand_total: reorderFormData.grandTotal,
-                    deposit: reorderFormData.deposit,
-                    discount: reorderFormData.discount,
-                    trip_fee: reorderFormData.tripFee,
-                    driver_fee: reorderFormData.driverFee,
-                    delivery_fee: reorderFormData.deliveryFee,
-                    pickup_fee: reorderFormData.pickupFee,
+                    rental_cost: totals.rental_cost,
+                    deposit: totals.deposit,
+                    discount: totals.discount_applied,
+                    trip_fee: totals.trip_fee,
+                    driver_fee: totals.driver_fee,
+                    delivery_fee: totals.delivery_fee,
+                    pickup_fee: totals.pickup_fee,
 
                     purpose: reorderFormData.purpose,
                   };
 
-                  // 1. Kirim ke fact_transaction
-                  const trxRes = await fetch(`${import.meta.env.VITE_API_URL}/fact_transaction`, {
+                  const trxRes = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/fact_transaction`, {
                     method: "POST",
                     headers: {
                       "Content-Type": "application/json",
@@ -1281,38 +1178,46 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
                     body: JSON.stringify(transactionPayload),
                   });
 
-                  if (!trxRes.ok) throw new Error("Gagal simpan fact_transaction");
+                  if (!trxRes.ok) {
+                    // 401 and 403 already get their own toast from the session guard.
+                    if (!isGuardedStatus(trxRes.status)) {
+                      toast.error(await readServerError(trxRes, 'Reorder gagal disimpan. Coba lagi.'));
+                    }
+                    return;
+                  }
 
-
-                  // ✅ Berhasil semua
+                  const saved: { booking_code?: string } = await trxRes.json().catch(() => ({}));
                   setShowConfirmationModal(false);
                   setSelectedCustomer(null);
-                  toast.success("Booking berhasil dikonfirmasi!");
+                  setReorderFormData(null);
+                  toast.success(
+                    saved.booking_code
+                      ? `Reorder ${saved.booking_code} tersimpan.`
+                      : 'Reorder tersimpan. Kode booking ada di menu Transaksi.',
+                  );
                 } catch (err) {
-                  console.error("Error saat submit:", err);
-                  toast.error("Gagal menyimpan booking!");
+                  console.error("Error saat submit reorder:", err);
+                  toast.error('Reorder belum tersimpan. Periksa koneksi ke server lalu coba lagi.');
+                } finally {
+                  reorderLock.current = false;
+                  setIsReorderSubmitting(false);
                 }
               }}
               />
-            </div>
-          </div>
+          </Modal>
         )}
 
-
-        {showTransactionModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="relative bg-white p-6 rounded-lg shadow-lg max-h-[80vh] w-full max-w-2xl overflow-y-auto">
-            <h2 className="text-xl font-semibold mb-4">Daftar Transaksi Customer</h2>
-
-            {/* Tombol Close */}
-            <button
-              className="absolute top-4 right-6 text-gray-500 text-xl"
-              onClick={() => setShowTransactionModal(false)}
-            >
-              ✕
-            </button>
-
-            <table className="w-full text-sm text-left text-gray-700">
+        <Modal
+          open={showTransactionModal}
+          onClose={() => setShowTransactionModal(false)}
+          title="Daftar Transaksi Customer"
+          size="lg"
+        >
+          {selectedTransactionList.length === 0 ? (
+            <p className="text-sm text-gray-600">Customer ini belum punya transaksi.</p>
+          ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[32rem] text-sm text-left text-gray-700">
               <thead>
                 <tr className="border-b">
                   <th className="py-2">Kode Booking</th>
@@ -1333,8 +1238,8 @@ const handleDocumentFileChange = (key: string, e: React.ChangeEvent<HTMLInputEle
               </tbody>
             </table>
           </div>
-        </div>
-      )}
+          )}
+        </Modal>
 
       </div>
   );
