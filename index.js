@@ -2,6 +2,7 @@
 require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
+const PgSessionStore = require('connect-pg-simple')(session);
 const pool = require('./db');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
@@ -11,9 +12,11 @@ const {
   requireRole, actor, apiGate, refreshSessionUser, sameOriginWrites, employeeChangeDenied, redactLogChanges,
   MANAGERS, ASSIGNABLE_LEVELS, ALLOWED_ORIGINS, SESSION_COOKIE, COOKIE_OPTIONS,
 } = require('./lib/auth');
+const { parsePort, parseTrustProxy, orExit } = require('./lib/config');
 const uploads = require('./lib/uploads');
 const { isBookingCodeConflict, withBookingCode } = require('./lib/bookingCode');
 const { LOOKUP_SQL, parseLookupQuery } = require('./lib/customerLookup');
+const { LOYALTY_SQL } = require('./lib/loyalty');
 const { deliverEmail } = require('./lib/mailer');
 const {
   WEB_CONFIG_FIELDS, FIELD_BY_KEY, parseWebConfigInput, rowsToConfig, publicConfig, signatoryFrom,
@@ -29,15 +32,31 @@ if (!SESSION_SECRET || SESSION_SECRET.length < 32) {
   console.error('SESSION_SECRET wajib diisi di .env, minimal 32 karakter.');
   process.exit(1);
 }
+const PORT = orExit(() => parsePort(process.env.PORT));
+const TRUST_PROXY = orExit(() => parseTrustProxy(process.env.TRUST_PROXY));
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const app = express();
+// Match nginx's login rate limit: /api/Login must not reach the same handler as /api/login.
+app.set('case sensitive routing', true);
 app.disable('x-powered-by');
+// Behind nginx the hop count lets req.secure follow X-Forwarded-Proto; without it
+// express-session refuses to send the secure cookie and login fails silently.
+if (TRUST_PROXY > 0) app.set('trust proxy', TRUST_PROXY);
+
+// Sessions live in Postgres so a container restart does not log everyone out.
+const sessionStore = new PgSessionStore({
+  pool,
+  tableName: process.env.SESSION_TABLE || 'app_session',
+  createTableIfMissing: false,
+  errorLog: (...args) => console.error('Session store error:', ...args),
+});
 
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(session({
   name: SESSION_COOKIE,
+  store: sessionStore,
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
@@ -75,6 +94,23 @@ function parseJsonList(value) {
     return [];
   }
 }
+
+const HEALTH_TIMEOUT_MS = 2000;
+app.get('/api/health', async (req, res) => {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`select 1 lebih dari ${HEALTH_TIMEOUT_MS} ms`)), HEALTH_TIMEOUT_MS);
+  });
+  try {
+    await Promise.race([pool.query('select 1'), timeout]);
+    return res.json({ status: 'ok' });
+  } catch (err) {
+    console.error('Health check gagal:', err.message);
+    return res.status(503).json({ status: 'unavailable' });
+  } finally {
+    clearTimeout(timer);
+  }
+});
 
 app.get('/', (req, res) => {
   res.send('Andi Rental API is running.');
@@ -1454,22 +1490,7 @@ app.post('/api/fact_transaction', async (req, res) => {
 // GET /api/loyalty-customers
 app.get('/api/loyalty-customers', async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT
-        ft.email,
-        dc.name,
-        dc.whatsapp,
-        dc.address,
-        COUNT(*) AS transaction_count
-      FROM fact_transaction ft
-      INNER JOIN dim_cust dc ON ft.email = dc.email
-        AND ft.name = dc.name
-        AND ft.whatsapp = dc.whatsapp
-        AND ft.address = dc.address
-      WHERE ft.deleted = false
-      GROUP BY ft.email, dc.name, dc.whatsapp, dc.address
-      ORDER BY transaction_count DESC
-    `);
+    const result = await pool.query(LOYALTY_SQL);
     res.json(result.rows);
   } catch (err) {
     console.error('Gagal ambil loyalty customer:', err);
@@ -1877,6 +1898,6 @@ process.on('unhandledRejection', (reason) => {
   console.error('Unhandled promise rejection:', reason);
 });
 
-app.listen(process.env.PORT, () => {
-  console.log(`API running at http://localhost:${process.env.PORT}`);
+app.listen(PORT, () => {
+  console.log(`API running at http://localhost:${PORT}`);
 });

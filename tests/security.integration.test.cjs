@@ -9,7 +9,7 @@ const MANAGER_PASSWORD = process.env.QA_MANAGER_PASSWORD;
 const skip = !(BASE && MANAGER && MANAGER_PASSWORD) && 'set TEST_BASE_URL, QA_MANAGER_USER, QA_MANAGER_PASSWORD';
 
 const RUN = Date.now().toString(36);
-const TEMP_PASSWORD = `Qa-t10-${RUN}-pw`;
+const TEMP_PASSWORD = `Qa-t10-${RUN}-pw`;  // ggignore: test-only fixture
 const BCRYPT = /\$2[aby]\$/;
 const RANDOM_UUID = '00000000-0000-4000-8000-000000000000';
 

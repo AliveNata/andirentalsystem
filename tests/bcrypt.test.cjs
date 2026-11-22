@@ -4,9 +4,9 @@ const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const bcrypt = require('bcrypt');
 
-const PASSWORD = 'QA-T14-bcrypt-uji';
-// Made once with psql: select crypt('QA-T14-bcrypt-uji', gen_salt('bf'));
-const PGCRYPTO_HASH = '$2a$06$TQQ9ejxIkKJbd1vc1NTUGu/mZDS3rcsb3jiVNYwJBunyC9l313NnW';
+const PASSWORD = 'QA-T14-bcrypt-uji';  // ggignore: test-only fixture
+// Made once with psql: select crypt('QA-T14-bcrypt-uji', gen_salt('bf'));  // ggignore
+const PGCRYPTO_HASH = '$2a$06$TQQ9ejxIkKJbd1vc1NTUGu/mZDS3rcsb3jiVNYwJBunyC9l313NnW';  // ggignore: hash of the test-only fixture above
 
 const BASE = process.env.TEST_BASE_URL;
 const ADMIN = process.env.QA_ADMIN_USER;

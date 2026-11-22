@@ -6,6 +6,10 @@ import { ScrollableTable, TABLE_HEAD_CLASS, TableMessageRow, Th } from './ui/Dat
 import { usePagination } from '../lib/usePagination';
 
 interface CustomerData {
+  // Unique per row (see lib/loyalty.js); customer_id can repeat across rows.
+  group_key: string;
+  // null for customers whose transactions all predate customer_id (DB/13).
+  customer_id: string | null;
   email: string;
   name: string;
   whatsapp: string;
@@ -38,16 +42,15 @@ function LoyaltyCustomer() {
 
   // The server sends customers ordered by transaction count, so the trophy follows the overall rank,
   // not the row number, and stays with the same customer while a search is active.
-  // Keyed by row object, not email: one email can appear on several rows (different name or WhatsApp),
-  // and an email key would hand the later row's rank to the top customer.
+  // The server sends one row per customer (grouped by email), so the row object is a safe key.
   const rankByRow = useMemo(() => new Map(data.map((cust, i) => [cust, i + 1])), [data]);
 
   const filteredData = data.filter((cust) => {
     const term = searchTerm.toLowerCase();
     return (
-      cust.name.toLowerCase().includes(term) ||
-      cust.email.toLowerCase().includes(term) ||
-      cust.whatsapp.includes(term)
+      (cust.name ?? '').toLowerCase().includes(term) ||
+      (cust.email ?? '').toLowerCase().includes(term) ||
+      (cust.whatsapp ?? '').includes(term)
     );
   });
 
@@ -102,7 +105,7 @@ function LoyaltyCustomer() {
                   paginatedData.map((cust, idx) => {
                     const rank = rankByRow.get(cust) ?? 0;
                     return (
-                      <tr key={`${cust.email}|${cust.name}|${cust.whatsapp}|${cust.address}`} className="hover:bg-gray-50">
+                      <tr key={cust.group_key} className="hover:bg-gray-50">
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 tabular-nums">
                           <span className="inline-flex items-center gap-2">
                             {startIndex + idx + 1}

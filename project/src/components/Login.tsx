@@ -35,12 +35,18 @@ function Login({ onLogin }: LoginProps) {
         body: JSON.stringify({ username, password })
       });
 
-      const data = await res.json();
-      console.log('🟢 Login Berhasil:', data);
+      // nginx answers 429 (rate limit) and 502 with an HTML page, so the body may not be JSON.
+      const data = await res.json().catch(() => null);
 
-      if (!res.ok) {
-        toast.error(data.message || 'Login gagal');
-        throw new Error(data.message || 'Login failed');
+      if (!res.ok || !data) {
+        if (res.status === 429) {
+          toast.error('Terlalu banyak percobaan login. Coba lagi sebentar lagi.');
+        } else if (data?.message) {
+          toast.error(data.message);
+        } else {
+          toast.error('Login gagal karena server tidak bisa dihubungi. Coba lagi sebentar lagi.');
+        }
+        return;
       }
 
       localStorage.setItem('user', JSON.stringify({
@@ -51,8 +57,10 @@ function Login({ onLogin }: LoginProps) {
 
       onLogin(username, password); // ini akan update state Auth di App.tsx
       navigate('/dashboard'); // opsional
-    } catch (err: any) {
-      console.error(err);
+    } catch (err) {
+      // Usually the request got no answer at all (offline, DNS, blocked by the browser).
+      console.error('Login gagal:', err);
+      toast.error('Login gagal. Periksa koneksi lalu coba lagi.');
     } finally {
       setIsLoading(false);
     }

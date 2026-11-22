@@ -111,7 +111,7 @@ after(async () => {
 
 test('N1: POST /api/employees with non-string level or username is 400 and the process stays up', { skip }, async () => {
   // Arrange
-  const base = { username: `qa-t14-n1-${RUN}`, full_name: 'QA T14', password: 'Qa-T14-pw-uji' };
+  const base = { username: `qa-t14-n1-${RUN}`, full_name: 'QA T14', password: 'Qa-T14-pw-uji' };  // ggignore: test-only fixture
   const bodies = [
     { ...base, level: ['admin'] },
     { ...base, level: { toLowerCase: 1 } },
@@ -136,7 +136,7 @@ test('N1: POST /api/employees with non-string level or username is 400 and the p
 test('N1: PUT /api/employees/:id with a non-string password or full_name is 400', { skip }, async () => {
   // Arrange
   const username = `qa-t14-put-${RUN}`;
-  const created = await api(manager, 'POST', '/api/employees', { username, full_name: 'QA T14', level: 'admin', password: 'Qa-T14-pw-uji' });
+  const created = await api(manager, 'POST', '/api/employees', { username, full_name: 'QA T14', level: 'admin', password: 'Qa-T14-pw-uji' });  // ggignore: test-only fixture
   assert.equal(created.status, 201);
   const list = await api(manager, 'GET', '/api/employees');
   const target = list.json.find((e) => e.username === username);

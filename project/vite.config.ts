@@ -4,7 +4,8 @@ import path from 'path';
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  base: './', // ⬅️ INI PENTING untuk path di Hostinger
+  // Absolute asset paths: with BrowserRouter a relative base breaks a refresh on a nested route.
+  base: '/',
   plugins: [react()],
   optimizeDeps: {
     exclude: ['lucide-react'],
@@ -16,7 +17,7 @@ export default defineConfig({
   },
   // server config hanya untuk dev, tidak digunakan saat build
   server: {
-    // Harus sama dengan ALLOWED_ORIGINS di lib/auth.js; strictPort supaya tidak pindah diam-diam ke port lain.
+    // Harus ada di ALLOWED_ORIGINS backend (default dev di lib/config.js); strictPort supaya tidak pindah diam-diam ke port lain.
     port: 5180,
     strictPort: true,
     proxy: {

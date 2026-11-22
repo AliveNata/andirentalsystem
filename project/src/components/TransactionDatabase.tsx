@@ -3,6 +3,8 @@ import { Search, Eye, FileDown, Clock, Edit2, Trash2, Send, Loader, Receipt, Fil
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import toast from 'react-hot-toast';
+// Export only. xlsx 0.18.5 has unfixed parse-side advisories (GHSA-4r6h-8v6p-xvw6 prototype
+// pollution, GHSA-5pgg-2g8v-p4x9 ReDoS): never call XLSX.read or sheet_to_* on a user-supplied file.
 import * as XLSX from 'xlsx';
 import { fileUrl } from '../lib/fileUrl';
 import { responseMessage } from '../lib/sessionGuard';

@@ -45,7 +45,7 @@ const CarFormModal: React.FC<CarFormModalProps> = ({ isOpen, onClose, onSuccess,
   const [errors, setErrors] = useState<{ [key: string]: boolean }>({});
   const [isSaving, setIsSaving] = useState(false);
 
-  const API_BASE_URL = import.meta.env.VITE_API_URL;
+  const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
   useEffect(() => {
     const qty = Number(formData.quantity);

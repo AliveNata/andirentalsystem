@@ -7,3 +7,6 @@ project/.env
 # file upload customer (dokumen identitas, bukti bayar) dan file debug
 uploads/
 *-debug.html
+
+# catatan internal (QA, deploy, data); repo ini public
+plans/

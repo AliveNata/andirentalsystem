@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import {  Edit2, Search, Trash2, UserPlus } from 'lucide-react';
 import axios from 'axios';
-import { Eye, EyeOff } from "lucide-react";
+import { Check, Copy, Eye, EyeOff } from "lucide-react";
 import { notifyError, notifySuccess } from '../lib/notify';
 import { ConfirmDialog, Modal, ModalButton } from './ui/Modal';
 import Pagination from './ui/Pagination';
 import { ScrollableTable, TABLE_HEAD_CLASS, TableMessageRow, Th } from './ui/DataTable';
 import { usePagination } from '../lib/usePagination';
+import { generateTempPassword } from '../lib/tempPassword.mjs';
 
 interface Employee {
   id: string;
@@ -30,6 +31,9 @@ const EmployeeManagement: React.FC = () => {
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  // Shown only while the edit form is open; closing the form drops it for good.
+  const [tempPassword, setTempPassword] = useState('');
+  const [copied, setCopied] = useState(false);
   const [formData, setFormData] = useState({
     username: '',
     full_name: '',
@@ -164,9 +168,27 @@ const EmployeeManagement: React.FC = () => {
   const closeEditModal = () => {
     setShowEditModal(false);
     setShowPassword(false);
+    setTempPassword('');
+    setCopied(false);
     setSelectedEmployee(null);
   };
   
+
+  const handleGenerateTempPassword = () => {
+    const password = generateTempPassword();
+    setFormData((prev) => ({ ...prev, password }));
+    setTempPassword(password);
+    setCopied(false);
+  };
+
+  const handleCopyTempPassword = async () => {
+    try {
+      await navigator.clipboard.writeText(tempPassword);
+      setCopied(true);
+    } catch (error) {
+      notifyError(error, 'Password gagal disalin. Blok teksnya lalu salin manual');
+    }
+  };
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -549,7 +571,10 @@ const {
                   <input
                     type={showPassword ? "text" : "password"} 
                     value={formData.password}
-                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    onChange={(e) => {
+                      setFormData({ ...formData, password: e.target.value });
+                      setTempPassword('');
+                    }}
                     className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500"
                   />
 
@@ -583,17 +608,34 @@ const {
                       <p className="text-red-500 text-sm">{formErrors.password}</p>
                     )}
 
+                  <div className="mt-3">
+                    <ModalButton onClick={handleGenerateTempPassword}>
+                      {tempPassword ? 'Buat ulang password sementara' : 'Buat password sementara'}
+                    </ModalButton>
+                  </div>
 
-                    
-
-<div className="flex items-center mt-2 space-x-2">
-  <ModalButton onClick={() => setFormData({ ...formData, password: 'Andirental!23' })} className="sm:w-auto w-auto">
-    Reset Password
-  </ModalButton>
-  <span className="text-xs text-red-500">
-    *Password akan direset ke <strong>Andirental!23</strong>
-  </span>
-  </div>
+                  {tempPassword && (
+                    <div className="mt-3 rounded-md border border-gray-300 bg-gray-50 p-3">
+                      <p id="temp-password-label" className="text-sm font-medium text-gray-700">Password sementara</p>
+                      <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-center">
+                        {/* Monospace so 5/S and 8/B stay distinguishable when the admin reads it out. */}
+                        <code
+                          aria-labelledby="temp-password-label"
+                          className="min-w-0 flex-1 select-all break-all rounded-md border border-gray-300 bg-white px-3 py-2 font-mono text-base text-gray-900"
+                        >
+                          {tempPassword}
+                        </code>
+                        <ModalButton onClick={handleCopyTempPassword}>
+                          {copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
+                          <span aria-live="polite">{copied ? 'Tersalin' : 'Salin'}</span>
+                        </ModalButton>
+                      </div>
+                      <p className="mt-2 text-xs text-gray-700">
+                        Klik Simpan supaya password ini berlaku. Password tidak ditampilkan lagi setelah form ditutup,
+                        jadi salin sekarang dan berikan langsung ke karyawan.
+                      </p>
+                    </div>
+                  )}
 
                 </div>
               </form>
