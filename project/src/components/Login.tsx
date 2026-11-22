@@ -127,7 +127,7 @@ function Login({ onLogin }: LoginProps) {
           </motion.h2>
 
           <motion.p {...fadeUp(0.15)} className="text-center text-sm mb-8">
-            Silakan login ke Andi Rental Mobil Jakarta System
+            Silakan login ke Andi Rental Management Information System
           </motion.p>
 
           <form onSubmit={handleSubmit} className="space-y-6">
