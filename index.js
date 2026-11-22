@@ -17,6 +17,7 @@ const uploads = require('./lib/uploads');
 const { isBookingCodeConflict, withBookingCode } = require('./lib/bookingCode');
 const { LOOKUP_SQL, parseLookupQuery } = require('./lib/customerLookup');
 const { LOYALTY_SQL } = require('./lib/loyalty');
+const { getDashboardSummary } = require('./lib/dashboardSummary');
 const { deliverEmail } = require('./lib/mailer');
 const {
   WEB_CONFIG_FIELDS, FIELD_BY_KEY, parseWebConfigInput, rowsToConfig, publicConfig, signatoryFrom,
@@ -1209,6 +1210,16 @@ app.delete('/api/employees/:id', requireRole(...MANAGERS), async (req, res) => {
   } catch (error) {
     console.error('Error deleting employee:', error);
     res.status(500).json({ message: 'Gagal menghapus data karyawan.' });
+  }
+});
+
+// Any logged-in level may read it; apiGate already requires a session because this route is not in PUBLIC_API.
+app.get('/api/dashboard/summary', async (req, res) => {
+  try {
+    res.json(await getDashboardSummary(pool));
+  } catch (error) {
+    console.error('Error fetching dashboard summary:', error);
+    res.status(500).json({ message: 'Gagal mengambil ringkasan dashboard.' });
   }
 });
 
