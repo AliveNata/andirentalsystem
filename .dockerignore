@@ -1,0 +1,17 @@
+**/node_modules
+**/.env
+**/.env.*
+.git
+.gitignore
+uploads
+tests
+DB
+plans
+deploy
+prisma
+portfolio
+project/dist
+*-debug.html
+*.md
+Dockerfile
+.dockerignore

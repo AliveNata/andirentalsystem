@@ -1,0 +1,11 @@
+[Unit]
+Description=ARMJ rentcar daily backup (postgres dump + uploads volume)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/rentcar/deploy/backup.sh
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=30min
